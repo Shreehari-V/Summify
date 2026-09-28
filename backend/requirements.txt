@@ -8,3 +8,7 @@ pydantic-settings
 python-multipart
 email-validator
 certifi
+pymupdf
+python-docx
+httpx
+imageio-ffmpeg

@@ -16,6 +16,7 @@ async def lifespan(app: FastAPI):
         try:
             await Settings.db.users.create_index("email", unique=True)
             await Settings.db.lectures.create_index("user_id")
+            await Settings.db.transcripts.create_index([("lecture_id", 1), ("user_id", 1)], unique=True)
         except Exception as e:
             print(f"Index creation notice: {e}")
     yield

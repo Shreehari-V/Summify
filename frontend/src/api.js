@@ -54,6 +54,9 @@ export const lecturesAPI = {
     }),
   getMyLectures: () => api.get("/lectures/my"),
   getLecture: (id) => api.get(`/lectures/${id}`),
+  getStatus: (id) => api.get(`/lectures/${id}/status`),
+  getTranscript: (id) => api.get(`/lectures/${id}/transcript`),
+  retryProcessing: (id) => api.post(`/lectures/${id}/retry`),
   deleteLecture: (id) => api.delete(`/lectures/${id}`),
   downloadFileUrl: (id) => `${API_BASE_URL}/lectures/${id}/file`,
 };

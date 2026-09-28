@@ -2,13 +2,15 @@
 
 import os
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, status
 from fastapi.responses import FileResponse
 from bson import ObjectId
+
 from ..dependencies import get_current_user
 from ..config import settings
-from ..schemas.lecture import LectureCreate, LectureRead
-from datetime import datetime
+from ..schemas.lecture import LectureCreate, LectureRead, LectureStatusResponse, TranscriptRead
+from ..processing_service import process_lecture_background
 
 router = APIRouter()
 
@@ -50,12 +52,13 @@ MAX_SIZE = 25 * 1024 * 1024  # 25 MB
 
 @router.post("/upload", response_model=LectureRead, status_code=status.HTTP_201_CREATED)
 async def upload_lecture(
+    background_tasks: BackgroundTasks,
     title: str = Form(""),
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
-    """Validate and store a lecture file, then persist metadata in MongoDB.
-    Returns the created lecture document.
+    """Validate and store a lecture file, persist metadata in MongoDB,
+    and trigger asynchronous processing (extraction / transcription).
     """
     if settings.db is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
@@ -92,10 +95,18 @@ async def upload_lecture(
         "storage_path": str(storage_path),
         "upload_date": datetime.utcnow(),
         "processing_status": "uploaded",
+        "status_message": "Queued for processing...",
+        "error_message": None,
+        "updated_at": datetime.utcnow(),
     }
 
     result = await settings.db.lectures.insert_one(lecture_doc)
-    lecture_doc["id"] = str(result.inserted_id)
+    lecture_id = str(result.inserted_id)
+    lecture_doc["id"] = lecture_id
+
+    # Launch asynchronous background processing (no Celery/Redis needed)
+    background_tasks.add_task(process_lecture_background, lecture_id=lecture_id, user_id=user["user_id"])
+
     return lecture_doc
 
 
@@ -132,9 +143,118 @@ async def get_lecture(lecture_id: str, user: dict = Depends(get_current_user)):
     return doc
 
 
+@router.get("/{lecture_id}/status", response_model=LectureStatusResponse)
+async def get_lecture_status(lecture_id: str, user: dict = Depends(get_current_user)):
+    """Get live-ish processing status of a lecture belonging to the authenticated user."""
+    if settings.db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+
+    try:
+        oid = ObjectId(lecture_id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lecture ID format")
+
+    doc = await settings.db.lectures.find_one({"_id": oid, "user_id": user["user_id"]})
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
+
+    has_transcript = False
+    if doc.get("processing_status") == "completed":
+        t_doc = await settings.db.transcripts.find_one(
+            {"lecture_id": lecture_id, "user_id": user["user_id"]},
+            {"_id": 1}
+        )
+        has_transcript = t_doc is not None
+
+    return {
+        "lecture_id": lecture_id,
+        "processing_status": doc.get("processing_status", "uploaded"),
+        "status_message": doc.get("status_message"),
+        "error_message": doc.get("error_message"),
+        "has_transcript": has_transcript,
+        "updated_at": doc.get("updated_at") or doc.get("upload_date"),
+    }
+
+
+@router.get("/{lecture_id}/transcript", response_model=TranscriptRead)
+async def get_lecture_transcript(lecture_id: str, user: dict = Depends(get_current_user)):
+    """Retrieve the extracted text or audio transcript for a lecture belonging to the user."""
+    if settings.db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+
+    try:
+        oid = ObjectId(lecture_id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lecture ID format")
+
+    # Enforce lecture ownership
+    lec = await settings.db.lectures.find_one({"_id": oid, "user_id": user["user_id"]})
+    if not lec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
+
+    transcript = await settings.db.transcripts.find_one({"lecture_id": lecture_id, "user_id": user["user_id"]})
+    if not transcript:
+        if lec.get("processing_status") == "failed":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Processing failed: {lec.get('error_message', 'Unknown extraction error')}",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transcript not ready yet (Current status: {lec.get('processing_status', 'uploaded')}).",
+        )
+
+    transcript["id"] = str(transcript["_id"])
+    return transcript
+
+
+@router.post("/{lecture_id}/retry", response_model=LectureStatusResponse)
+async def retry_lecture_processing(
+    lecture_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    """Re-trigger background extraction/transcription for a lecture without re-uploading."""
+    if settings.db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+
+    try:
+        oid = ObjectId(lecture_id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lecture ID format")
+
+    doc = await settings.db.lectures.find_one({"_id": oid, "user_id": user["user_id"]})
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
+
+    # Reset status and enqueue task
+    await settings.db.lectures.update_one(
+        {"_id": oid},
+        {
+            "$set": {
+                "processing_status": "uploaded",
+                "status_message": "Re-queued for processing...",
+                "error_message": None,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    background_tasks.add_task(process_lecture_background, lecture_id=lecture_id, user_id=user["user_id"])
+
+    return {
+        "lecture_id": lecture_id,
+        "processing_status": "uploaded",
+        "status_message": "Re-queued for processing...",
+        "error_message": None,
+        "has_transcript": False,
+        "updated_at": datetime.utcnow(),
+    }
+
+
 @router.delete("/{lecture_id}", status_code=status.HTTP_200_OK)
 async def delete_lecture(lecture_id: str, user: dict = Depends(get_current_user)):
-    """Delete a lecture record and its stored file."""
+    """Delete a lecture record, its stored file, and its transcript."""
     if settings.db is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
 
@@ -155,8 +275,11 @@ async def delete_lecture(lecture_id: str, user: dict = Depends(get_current_user)
         except Exception:
             pass
 
+    # Delete both the lecture and associated transcript
     await settings.db.lectures.delete_one({"_id": oid})
-    return {"message": "Lecture deleted successfully", "id": lecture_id}
+    await settings.db.transcripts.delete_one({"lecture_id": lecture_id, "user_id": user["user_id"]})
+
+    return {"message": "Lecture and transcript deleted successfully", "id": lecture_id}
 
 
 @router.get("/{lecture_id}/file")

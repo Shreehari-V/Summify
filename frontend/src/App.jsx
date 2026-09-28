@@ -23,6 +23,10 @@ import {
   RefreshCw,
   Eye,
   Activity,
+  Copy,
+  Check,
+  RotateCcw,
+  FileCheck,
 } from "lucide-react";
 import { authAPI, lecturesAPI, healthAPI } from "./api";
 import "./App.css";
@@ -59,6 +63,15 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [selectedLecture, setSelectedLecture] = useState(null);
+
+  // Module 2: Transcript & Processing State
+  const [transcriptData, setTranscriptData] = useState(null);
+  const [loadingTranscript, setLoadingTranscript] = useState(false);
+  const [transcriptError, setTranscriptError] = useState("");
+  const [transcriptSearch, setTranscriptSearch] = useState("");
+  const [copiedTranscript, setCopiedTranscript] = useState(false);
+  const [modalTab, setModalTab] = useState("transcript"); // 'transcript' | 'details'
+  const [retrying, setRetrying] = useState(false);
 
   // Upload State
   const [dragActive, setDragActive] = useState(false);
@@ -128,6 +141,143 @@ export default function App() {
     setTimeout(() => {
       setAlert(null);
     }, 4500);
+  };
+
+  // Poll status & fetch transcript when a lecture is selected
+  useEffect(() => {
+    if (!selectedLecture) {
+      setTranscriptData(null);
+      setTranscriptError("");
+      setTranscriptSearch("");
+      setCopiedTranscript(false);
+      return;
+    }
+
+    let isMounted = true;
+    let pollTimer = null;
+
+    const fetchTranscript = async () => {
+      try {
+        setLoadingTranscript(true);
+        setTranscriptError("");
+        const res = await lecturesAPI.getTranscript(selectedLecture.id);
+        if (isMounted) {
+          setTranscriptData(res.data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          const detail = err.response?.data?.detail || "Transcript could not be loaded.";
+          setTranscriptError(typeof detail === "string" ? detail : JSON.stringify(detail));
+        }
+      } finally {
+        if (isMounted) setLoadingTranscript(false);
+      }
+    };
+
+    const pollStatus = async () => {
+      try {
+        const res = await lecturesAPI.getStatus(selectedLecture.id);
+        if (!isMounted) return;
+
+        setSelectedLecture((prev) => {
+          if (!prev || prev.id !== selectedLecture.id) return prev;
+          return {
+            ...prev,
+            processing_status: res.data.processing_status,
+            status_message: res.data.status_message,
+            error_message: res.data.error_message,
+          };
+        });
+
+        // Keep main library list in sync
+        setLectures((prev) =>
+          prev.map((item) =>
+            item.id === selectedLecture.id
+              ? {
+                  ...item,
+                  processing_status: res.data.processing_status,
+                  status_message: res.data.status_message,
+                  error_message: res.data.error_message,
+                }
+              : item
+          )
+        );
+
+        if (res.data.processing_status === "completed") {
+          fetchTranscript();
+        } else if (res.data.processing_status === "failed") {
+          setTranscriptError(res.data.error_message || "Processing failed.");
+        } else {
+          pollTimer = setTimeout(pollStatus, 1800);
+        }
+      } catch (err) {
+        console.error("Status polling error:", err);
+      }
+    };
+
+    if (selectedLecture.processing_status === "completed") {
+      fetchTranscript();
+    } else if (["uploaded", "extracting", "transcribing"].includes(selectedLecture.processing_status)) {
+      pollStatus();
+    } else if (selectedLecture.processing_status === "failed") {
+      setTranscriptError(selectedLecture.error_message || "Processing failed.");
+    }
+
+    return () => {
+      isMounted = false;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [selectedLecture?.id, selectedLecture?.processing_status]);
+
+  const handleRetryProcessing = async (lectureId) => {
+    try {
+      setRetrying(true);
+      const res = await lecturesAPI.retryProcessing(lectureId);
+      setSelectedLecture((prev) => ({
+        ...prev,
+        processing_status: res.data.processing_status,
+        status_message: res.data.status_message,
+        error_message: null,
+      }));
+      setLectures((prev) =>
+        prev.map((item) =>
+          item.id === lectureId
+            ? {
+                ...item,
+                processing_status: res.data.processing_status,
+                status_message: res.data.status_message,
+                error_message: null,
+              }
+            : item
+        )
+      );
+      showAlert("success", "Processing re-queued!");
+    } catch (err) {
+      showAlert("danger", "Failed to re-trigger processing.");
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const handleCopyTranscript = () => {
+    if (!transcriptData?.text) return;
+    navigator.clipboard.writeText(transcriptData.text);
+    setCopiedTranscript(true);
+    setTimeout(() => setCopiedTranscript(false), 2200);
+  };
+
+  const handleDownloadTranscript = () => {
+    if (!transcriptData?.text || !selectedLecture) return;
+    const blob = new Blob([transcriptData.text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeTitle = selectedLecture.title.replace(/[^a-zA-Z0-9_-]/g, "_");
+    link.href = url;
+    link.download = `${safeTitle}_transcript.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // Auth Handlers
@@ -241,12 +391,14 @@ export default function App() {
         setUploadProgress(percentCompleted);
       });
 
-      showAlert("success", `Lecture "${res.data.title}" uploaded successfully!`);
+      showAlert("success", `Lecture "${res.data.title}" uploaded! Processing started...`);
       setSelectedFile(null);
       setUploadTitle("");
       setUploadProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
       loadLectures();
+      setSelectedLecture(res.data);
+      setModalTab("transcript");
     } catch (err) {
       const detail = err.response?.data?.detail || "Upload failed. Please check file format and size.";
       showAlert("danger", typeof detail === "string" ? detail : JSON.stringify(detail));
@@ -558,7 +710,7 @@ export default function App() {
               />
             </div>
             <div className="filter-pills">
-              {["all", "uploaded", "processing", "completed"].map((st) => (
+              {["all", "completed", "extracting", "transcribing", "failed", "uploaded"].map((st) => (
                 <button
                   key={st}
                   className={`filter-btn ${filterStatus === st ? "active" : ""}`}
@@ -579,7 +731,10 @@ export default function App() {
                   <div
                     key={lecture.id}
                     className="lecture-card"
-                    onClick={() => setSelectedLecture(lecture)}
+                    onClick={() => {
+                      setSelectedLecture(lecture);
+                      setModalTab("transcript");
+                    }}
                   >
                     <div className="card-top">
                       <div className={`file-type-icon ${category}`}>
@@ -595,11 +750,11 @@ export default function App() {
 
                     <div>
                       <span className={`status-badge ${lecture.processing_status}`}>
-                        {lecture.processing_status === "completed" ? (
-                          <CheckCircle2 size={12} />
-                        ) : (
-                          <Clock size={12} />
-                        )}
+                        {lecture.processing_status === "completed" && <CheckCircle2 size={12} />}
+                        {lecture.processing_status === "extracting" && <RefreshCw size={12} className="spin-animation" />}
+                        {lecture.processing_status === "transcribing" && <Activity size={12} className="pulse-animation" />}
+                        {lecture.processing_status === "failed" && <AlertCircle size={12} />}
+                        {lecture.processing_status === "uploaded" && <Clock size={12} />}
                         {lecture.processing_status}
                       </span>
                     </div>
@@ -612,20 +767,21 @@ export default function App() {
                     <div className="card-actions">
                       <button
                         className="btn btn-secondary btn-icon"
-                        title="View Details"
+                        title="View Processing & Transcript"
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedLecture(lecture);
+                          setModalTab("transcript");
                         }}
                       >
-                        <Eye size={16} />
+                        <FileText size={16} />
                       </button>
                       <a
                         href={lecturesAPI.downloadFileUrl(lecture.id)}
                         target="_blank"
                         rel="noreferrer"
                         className="btn btn-secondary btn-icon"
-                        title="Download File"
+                        title="Download Source File"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <Download size={16} />
@@ -662,66 +818,372 @@ export default function App() {
         </section>
       </main>
 
-      {/* LECTURE DETAIL MODAL */}
+      {/* MODULE 2: PROCESSING STATUS & TRANSCRIPT MODAL */}
       {selectedLecture && (
         <div className="modal-overlay" onClick={() => setSelectedLecture(null)}>
-          <div className="modal-content lecture-detail-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setSelectedLecture(null)}>
+          <div className="modal-content transcript-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setSelectedLecture(null)} title="Close">
               <X size={20} />
             </button>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1.5rem" }}>
-              <div className={`file-type-icon ${getFileCategory(selectedLecture.file_type, selectedLecture.original_filename)}`}>
-                {renderFileIcon(getFileCategory(selectedLecture.file_type, selectedLecture.original_filename))}
+
+            {/* Header */}
+            <div className="modal-header-section">
+              <div className="modal-header-info">
+                <div className={`file-type-icon ${getFileCategory(selectedLecture.file_type, selectedLecture.original_filename)}`}>
+                  {renderFileIcon(getFileCategory(selectedLecture.file_type, selectedLecture.original_filename))}
+                </div>
+                <div className="modal-title-wrap">
+                  <h3>{selectedLecture.title}</h3>
+                  <div className="subtitle">
+                    {selectedLecture.original_filename} • {formatBytes(selectedLecture.file_size)} • {formatDate(selectedLecture.upload_date)}
+                  </div>
+                </div>
               </div>
-              <div>
-                <h3 style={{ fontSize: "1.25rem" }}>{selectedLecture.title}</h3>
-                <span className={`status-badge ${selectedLecture.processing_status}`} style={{ marginTop: "0.25rem" }}>
-                  {selectedLecture.processing_status}
-                </span>
-              </div>
+              <span className={`status-badge ${selectedLecture.processing_status}`}>
+                {selectedLecture.processing_status === "completed" && <CheckCircle2 size={12} />}
+                {selectedLecture.processing_status === "extracting" && <RefreshCw size={12} className="spin-animation" />}
+                {selectedLecture.processing_status === "transcribing" && <Activity size={12} className="pulse-animation" />}
+                {selectedLecture.processing_status === "failed" && <AlertCircle size={12} />}
+                {selectedLecture.processing_status === "uploaded" && <Clock size={12} />}
+                {selectedLecture.processing_status}
+              </span>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", fontSize: "0.9rem", textAlign: "left" }}>
-              <div className="user-badge" style={{ justifyContent: "space-between" }}>
-                <span style={{ color: "var(--text-muted)" }}>Filename</span>
-                <span style={{ fontWeight: 600 }}>{selectedLecture.original_filename}</span>
-              </div>
-              <div className="user-badge" style={{ justifyContent: "space-between" }}>
-                <span style={{ color: "var(--text-muted)" }}>File Size</span>
-                <span>{formatBytes(selectedLecture.file_size)}</span>
-              </div>
-              <div className="user-badge" style={{ justifyContent: "space-between" }}>
-                <span style={{ color: "var(--text-muted)" }}>File Type</span>
-                <span>{selectedLecture.file_type}</span>
-              </div>
-              <div className="user-badge" style={{ justifyContent: "space-between" }}>
-                <span style={{ color: "var(--text-muted)" }}>Upload Date</span>
-                <span>{formatDate(selectedLecture.upload_date)}</span>
-              </div>
-              <div className="user-badge" style={{ justifyContent: "space-between" }}>
-                <span style={{ color: "var(--text-muted)" }}>Lecture ID</span>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem" }}>{selectedLecture.id}</span>
-              </div>
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.75rem" }}>
-              <a
-                href={lecturesAPI.downloadFileUrl(selectedLecture.id)}
-                target="_blank"
-                rel="noreferrer"
-                className="btn btn-primary"
-              >
-                <Download size={16} /> Download Source
-              </a>
+            {/* Tab navigation */}
+            <div className="tab-nav">
               <button
-                className="btn btn-danger"
-                onClick={(e) => {
-                  handleDeleteLecture(selectedLecture.id, e);
-                }}
+                type="button"
+                className={`tab-nav-btn ${modalTab === "transcript" ? "active" : ""}`}
+                onClick={() => setModalTab("transcript")}
               >
-                <Trash2 size={16} /> Delete
+                Processing & Transcript
+              </button>
+              <button
+                type="button"
+                className={`tab-nav-btn ${modalTab === "details" ? "active" : ""}`}
+                onClick={() => setModalTab("details")}
+              >
+                File Details
               </button>
             </div>
+
+            {/* TAB 1: PROCESSING & TRANSCRIPT */}
+            {modalTab === "transcript" && (
+              <>
+                {/* 1. Stepper Card */}
+                {(() => {
+                  const cat = getFileCategory(selectedLecture.file_type, selectedLecture.original_filename);
+                  let steps = [];
+                  if (cat === "video") {
+                    steps = [
+                      { key: "uploaded", label: "Uploaded" },
+                      { key: "extracting", label: "Extract Audio" },
+                      { key: "transcribing", label: "Transcribing" },
+                      { key: "completed", label: "Completed" },
+                    ];
+                  } else if (cat === "audio") {
+                    steps = [
+                      { key: "uploaded", label: "Uploaded" },
+                      { key: "transcribing", label: "Transcribing" },
+                      { key: "completed", label: "Completed" },
+                    ];
+                  } else {
+                    steps = [
+                      { key: "uploaded", label: "Uploaded" },
+                      { key: "extracting", label: "Extracting" },
+                      { key: "completed", label: "Completed" },
+                    ];
+                  }
+
+                  const currentStatus = selectedLecture.processing_status;
+                  const isFailed = currentStatus === "failed";
+                  const stepKeys = steps.map((s) => s.key);
+                  let currentIndex = stepKeys.indexOf(currentStatus);
+                  if (isFailed) {
+                    currentIndex = 1;
+                  } else if (currentStatus === "completed") {
+                    currentIndex = steps.length - 1;
+                  } else if (currentIndex === -1) {
+                    currentIndex = 0;
+                  }
+
+                  const progressPercent = (currentIndex / (steps.length - 1)) * 100;
+
+                  return (
+                    <div className="stepper-card">
+                      <div className="stepper-flow">
+                        <div className="step-line">
+                          <div
+                            className="step-line-progress"
+                            style={{
+                              width: `${progressPercent}%`,
+                              background: isFailed ? "var(--danger)" : "var(--success)",
+                            }}
+                          />
+                        </div>
+                        {steps.map((st, idx) => {
+                          let nodeClass = "step-node";
+                          let circleContent = idx + 1;
+
+                          if (currentStatus === "completed" || idx < currentIndex) {
+                            nodeClass += " completed";
+                            circleContent = <Check size={16} />;
+                          } else if (st.key === currentStatus) {
+                            nodeClass += " active";
+                            circleContent = <RefreshCw size={16} className="spin-animation" />;
+                          } else if (isFailed && idx === currentIndex) {
+                            nodeClass += " failed";
+                            circleContent = <AlertCircle size={16} />;
+                          }
+
+                          return (
+                            <div key={st.key} className={nodeClass}>
+                              <div className="step-circle">{circleContent}</div>
+                              <span className="step-label">{st.label}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="live-status-card">
+                        <div className="live-status-left">
+                          <span
+                            className={`live-status-dot ${["extracting", "transcribing"].includes(currentStatus) ? "active" : ""}`}
+                            style={{
+                              background:
+                                currentStatus === "completed"
+                                  ? "var(--success)"
+                                  : currentStatus === "failed"
+                                  ? "var(--danger)"
+                                  : "var(--warning)",
+                            }}
+                          />
+                          <span style={{ fontWeight: 600 }}>
+                            {selectedLecture.status_message ||
+                              (currentStatus === "completed"
+                                ? "Content processed and saved to database"
+                                : currentStatus === "failed"
+                                ? "Processing failed"
+                                : "Queued for processing...")}
+                          </span>
+                        </div>
+                        {["uploaded", "extracting", "transcribing"].includes(currentStatus) && (
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                            <RefreshCw size={12} className="spin-animation" />
+                            <span>Live sync</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* 2. Failure State */}
+                {selectedLecture.processing_status === "failed" && (
+                  <div className="failure-box">
+                    <div className="failure-header">
+                      <AlertCircle size={18} />
+                      <span>Processing Failure</span>
+                    </div>
+                    <div className="failure-message">
+                      {selectedLecture.error_message || transcriptError || "An error occurred during extraction or transcription."}
+                    </div>
+                    {(selectedLecture.error_message?.includes("HF_TOKEN") ||
+                      transcriptError?.includes("HF_TOKEN") ||
+                      selectedLecture.error_message?.includes("Hugging Face")) && (
+                      <p style={{ fontSize: "0.82rem", color: "var(--accent-cream)", marginTop: "0.25rem" }}>
+                        💡 <strong>Hugging Face Token Required:</strong> Audio and video transcription use OpenAI Whisper hosted inference. Add <code>HF_TOKEN=hf_...</code> to your <code>.env</code> file, then click Retry below.
+                      </p>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.5rem" }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => handleRetryProcessing(selectedLecture.id)}
+                        disabled={retrying}
+                      >
+                        <RotateCcw size={14} className={retrying ? "spin-animation" : ""} />
+                        {retrying ? "Retrying..." : "Retry Processing"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. In Progress Spinner */}
+                {["uploaded", "extracting", "transcribing"].includes(selectedLecture.processing_status) && (
+                  <div style={{ padding: "2.5rem 1rem", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.85rem" }}>
+                    <RefreshCw size={32} className="spin-animation" color="var(--accent-sage-light)" />
+                    <p style={{ color: "var(--text-secondary)", fontSize: "0.92rem" }}>
+                      {selectedLecture.processing_status === "transcribing"
+                        ? "Hugging Face Whisper model is transcribing speech..."
+                        : "Extracting readable content from document..."}
+                    </p>
+                  </div>
+                )}
+
+                {/* 4. Transcript Content Viewer */}
+                {selectedLecture.processing_status === "completed" && (
+                  <>
+                    {loadingTranscript ? (
+                      <div style={{ padding: "2.5rem 1rem", textAlign: "center" }}>
+                        <RefreshCw size={28} className="spin-animation" color="var(--accent-cream)" />
+                        <p style={{ color: "var(--text-muted)", marginTop: "0.75rem" }}>Loading transcript...</p>
+                      </div>
+                    ) : transcriptData ? (
+                      <div className="transcript-container">
+                        {/* Toolbar */}
+                        <div className="transcript-toolbar">
+                          <div className="transcript-stats-pills">
+                            <span className="stat-pill">
+                              <FileCheck size={13} />
+                              <strong>{transcriptData.word_count || 0}</strong> words
+                            </span>
+                            <span className="stat-pill">
+                              <strong>{transcriptData.character_count || 0}</strong> chars
+                            </span>
+                            <span className="stat-pill">
+                              Source:{" "}
+                              <strong>{transcriptData.source_type === "audio" ? "Whisper Transcription" : "Document Extraction"}</strong>
+                            </span>
+                            {transcriptData.metadata?.extractor && (
+                              <span className="stat-pill">
+                                Engine: <strong>{transcriptData.metadata.extractor}</strong>
+                              </span>
+                            )}
+                            {transcriptData.metadata?.total_pages && (
+                              <span className="stat-pill">
+                                Pages: <strong>{transcriptData.metadata.total_pages}</strong>
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="transcript-actions">
+                            <div className="transcript-search-wrap">
+                              <Search size={14} />
+                              <input
+                                type="text"
+                                className="input-control"
+                                placeholder="Search in transcript..."
+                                value={transcriptSearch}
+                                onChange={(e) => setTranscriptSearch(e.target.value)}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={handleCopyTranscript}
+                              title="Copy to clipboard"
+                            >
+                              {copiedTranscript ? (
+                                <>
+                                  <Check size={14} color="#a7f3d0" /> Copied!
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={14} /> Copy
+                                </>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={handleDownloadTranscript}
+                              title="Download as text file"
+                            >
+                              <Download size={14} /> Export .txt
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Scroll Canvas */}
+                        <div className="transcript-scroll-canvas">
+                          {(() => {
+                            const paragraphs = transcriptData.text.split("\n\n").filter((p) => p.trim());
+                            const searchLower = transcriptSearch.trim().toLowerCase();
+
+                            if (paragraphs.length === 0) {
+                              return <p style={{ color: "var(--text-muted)" }}>[No text available in transcript]</p>;
+                            }
+
+                            return paragraphs.map((para, idx) => {
+                              if (!searchLower) {
+                                return <p key={idx}>{para}</p>;
+                              }
+                              const regex = new RegExp(`(${searchLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+                              const parts = para.split(regex);
+                              return (
+                                <p key={idx}>
+                                  {parts.map((part, pIdx) =>
+                                    part.toLowerCase() === searchLower ? (
+                                      <mark key={pIdx} className="search-highlight">
+                                        {part}
+                                      </mark>
+                                    ) : (
+                                      part
+                                    )
+                                  )}
+                                </p>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>
+                        {transcriptError || "Transcript record could not be loaded."}
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+
+            {/* TAB 2: FILE DETAILS */}
+            {modalTab === "details" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", marginTop: "0.5rem" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", fontSize: "0.9rem", textAlign: "left" }}>
+                  <div className="user-badge" style={{ justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Filename</span>
+                    <span style={{ fontWeight: 600 }}>{selectedLecture.original_filename}</span>
+                  </div>
+                  <div className="user-badge" style={{ justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>File Size</span>
+                    <span>{formatBytes(selectedLecture.file_size)}</span>
+                  </div>
+                  <div className="user-badge" style={{ justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>File Type</span>
+                    <span>{selectedLecture.file_type}</span>
+                  </div>
+                  <div className="user-badge" style={{ justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Upload Date</span>
+                    <span>{formatDate(selectedLecture.upload_date)}</span>
+                  </div>
+                  <div className="user-badge" style={{ justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Lecture ID</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem" }}>{selectedLecture.id}</span>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1rem" }}>
+                  <a
+                    href={lecturesAPI.downloadFileUrl(selectedLecture.id)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-primary"
+                  >
+                    <Download size={16} /> Download Source File
+                  </a>
+                  <button
+                    className="btn btn-danger"
+                    onClick={(e) => {
+                      handleDeleteLecture(selectedLecture.id, e);
+                    }}
+                  >
+                    <Trash2 size={16} /> Delete Lecture
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

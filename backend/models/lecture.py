@@ -16,6 +16,9 @@ class Lecture:
         storage_path: str,
         upload_date: Optional[datetime] = None,
         processing_status: str = "uploaded",
+        status_message: Optional[str] = None,
+        error_message: Optional[str] = None,
+        updated_at: Optional[datetime] = None,
     ):
         self.id = id
         self.user_id = user_id
@@ -26,3 +29,6 @@ class Lecture:
         self.storage_path = storage_path
         self.upload_date = upload_date or datetime.utcnow()
         self.processing_status = processing_status
+        self.status_message = status_message
+        self.error_message = error_message
+        self.updated_at = updated_at or datetime.utcnow()
