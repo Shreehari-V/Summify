@@ -1,0 +1,138 @@
+/* frontend/src/index.css */
+
+:root {
+  --font-primary: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /*
+   * Exact 4-Color Palette from reference:
+   * Band 1 (Deep Crimson / Garnet Wine): #6d0202
+   * Band 2 (Dark Maroon / Black-Cherry): #290000
+   * Band 3 (Muted Slate Sage):           #767e70
+   * Band 4 (Warm Soft Cream / Ivory):    #efebd8
+   */
+
+  --bg-base: #1c0000;
+  --bg-surface: #290000;
+  --bg-surface-elevated: #3b0505;
+  --bg-card: rgba(41, 0, 0, 0.88);
+  --bg-card-hover: rgba(59, 5, 5, 0.95);
+  --bg-glass: rgba(35, 1, 1, 0.85);
+  
+  --border-subtle: rgba(239, 235, 216, 0.08);
+  --border-glass: rgba(239, 235, 216, 0.15);
+  --border-accent: rgba(109, 2, 2, 0.7);
+  --border-sage: rgba(118, 126, 112, 0.35);
+
+  --text-primary: #efebd8;
+  --text-secondary: #c2c9bf;
+  --text-muted: #767e70;
+
+  --accent-primary: #6d0202;
+  --accent-primary-hover: #840707;
+  --accent-secondary: #767e70;
+  --accent-sage-light: #949e8e;
+  --accent-cream: #efebd8;
+  --accent-gradient: linear-gradient(135deg, #6d0202 0%, #460202 60%, #767e70 100%);
+
+  /* Functional alert colors - muted and harmonious */
+  --success: #388e3c;
+  --success-bg: rgba(56, 142, 60, 0.18);
+  --warning: #d97706;
+  --warning-bg: rgba(217, 119, 6, 0.18);
+  --danger: #9e1a1a;
+  --danger-bg: rgba(158, 26, 26, 0.22);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 9999px;
+
+  /* Natural depth shadows - ZERO NEON GLOW */
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.7);
+
+  --blur-glass: blur(14px);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-primary);
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.5;
+  overflow-x: hidden;
+  background-image: 
+    radial-gradient(circle at 15% 15%, rgba(109, 2, 2, 0.22) 0%, transparent 48%),
+    radial-gradient(circle at 85% 85%, rgba(118, 126, 112, 0.12) 0%, transparent 52%),
+    radial-gradient(circle at 50% 50%, rgba(41, 0, 0, 0.65) 0%, transparent 70%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-surface-elevated);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
+
+/* Typography Defaults */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+a {
+  color: var(--accent-cream);
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+a:hover {
+  color: var(--accent-sage-light);
+}
+
+button {
+  font-family: var(--font-primary);
+  cursor: pointer;
+  border: none;
+  outline: none;
+  background: none;
+}
+
+input, select, textarea {
+  font-family: var(--font-primary);
+  color: var(--text-primary);
+  outline: none;
+}
