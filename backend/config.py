@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=60, env="ACCESS_TOKEN_EXPIRE_MINUTES")
     hf_token: str | None = Field(default=None, env="HF_TOKEN")
     hf_whisper_model: str = Field(default="openai/whisper-large-v3-turbo", env="HF_WHISPER_MODEL")
+    hf_summary_model: str = Field(default="facebook/bart-large-cnn", env="HF_SUMMARY_MODEL")
+    hf_flashcard_model: str = Field(default="meta-llama/Llama-3.1-8B-Instruct", env="HF_FLASHCARD_MODEL")
+    default_flashcard_count: int = Field(default=10, env="DEFAULT_FLASHCARD_COUNT")
     # This will be set after the DB connection is established
     db: ClassVar[Any] = None
 

@@ -27,6 +27,11 @@ import {
   Check,
   RotateCcw,
   FileCheck,
+  Layers,
+  Tag,
+  ChevronLeft,
+  ChevronRight,
+  List,
 } from "lucide-react";
 import { authAPI, lecturesAPI, healthAPI } from "./api";
 import "./App.css";
@@ -64,14 +69,38 @@ export default function App() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [selectedLecture, setSelectedLecture] = useState(null);
 
-  // Module 2: Transcript & Processing State
+  // Modal & Pipeline Navigation
+  const [modalTab, setModalTab] = useState("summary"); // 'summary' | 'keywords' | 'flashcards' | 'transcript' | 'details'
+  const [retrying, setRetrying] = useState(false);
+
+  // Module 2: Transcript State
   const [transcriptData, setTranscriptData] = useState(null);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [transcriptError, setTranscriptError] = useState("");
   const [transcriptSearch, setTranscriptSearch] = useState("");
   const [copiedTranscript, setCopiedTranscript] = useState(false);
-  const [modalTab, setModalTab] = useState("transcript"); // 'transcript' | 'details'
-  const [retrying, setRetrying] = useState(false);
+
+  // Module 3: Summary State
+  const [summaryData, setSummaryData] = useState(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState("");
+  const [copiedSummary, setCopiedSummary] = useState(false);
+
+  // Module 3: Keywords & Concepts State
+  const [keywordsData, setKeywordsData] = useState(null);
+  const [loadingKeywords, setLoadingKeywords] = useState(false);
+  const [keywordsError, setKeywordsError] = useState("");
+  const [keywordSearch, setKeywordSearch] = useState("");
+
+  // Module 3: Flashcards State
+  const [flashcardsData, setFlashcardsData] = useState(null);
+  const [loadingFlashcards, setLoadingFlashcards] = useState(false);
+  const [flashcardsError, setFlashcardsError] = useState("");
+  const [regeneratingCards, setRegeneratingCards] = useState(false);
+  const [flashcardCountSelect, setFlashcardCountSelect] = useState(10);
+  const [flashcardViewMode, setFlashcardViewMode] = useState("carousel"); // 'carousel' | 'list'
+  const [currentCardIndex, setCurrentCardIndex] = useState(0);
+  const [isCardFlipped, setIsCardFlipped] = useState(false);
 
   // Upload State
   const [dragActive, setDragActive] = useState(false);
@@ -143,27 +172,88 @@ export default function App() {
     }, 4500);
   };
 
-  // Poll status & fetch transcript when a lecture is selected
+  // Poll status & fetch all artifacts when a lecture is selected
   useEffect(() => {
     if (!selectedLecture) {
       setTranscriptData(null);
       setTranscriptError("");
       setTranscriptSearch("");
       setCopiedTranscript(false);
+
+      setSummaryData(null);
+      setSummaryError("");
+      setCopiedSummary(false);
+
+      setKeywordsData(null);
+      setKeywordsError("");
+      setKeywordSearch("");
+
+      setFlashcardsData(null);
+      setFlashcardsError("");
+      setCurrentCardIndex(0);
+      setIsCardFlipped(false);
       return;
     }
 
     let isMounted = true;
     let pollTimer = null;
 
-    const fetchTranscript = async () => {
+    const fetchAllArtifacts = async (lectureId) => {
+      // 1. Fetch Summary
+      try {
+        setLoadingSummary(true);
+        setSummaryError("");
+        const res = await lecturesAPI.getSummary(lectureId);
+        if (isMounted) setSummaryData(res.data);
+      } catch (err) {
+        if (isMounted) {
+          const detail = err.response?.data?.detail || "Summary not ready yet.";
+          setSummaryError(typeof detail === "string" ? detail : JSON.stringify(detail));
+        }
+      } finally {
+        if (isMounted) setLoadingSummary(false);
+      }
+
+      // 2. Fetch Keywords
+      try {
+        setLoadingKeywords(true);
+        setKeywordsError("");
+        const res = await lecturesAPI.getKeywords(lectureId);
+        if (isMounted) setKeywordsData(res.data);
+      } catch (err) {
+        if (isMounted) {
+          const detail = err.response?.data?.detail || "Keywords not ready yet.";
+          setKeywordsError(typeof detail === "string" ? detail : JSON.stringify(detail));
+        }
+      } finally {
+        if (isMounted) setLoadingKeywords(false);
+      }
+
+      // 3. Fetch Flashcards
+      try {
+        setLoadingFlashcards(true);
+        setFlashcardsError("");
+        const res = await lecturesAPI.getFlashcards(lectureId);
+        if (isMounted) {
+          setFlashcardsData(res.data);
+          setCurrentCardIndex(0);
+          setIsCardFlipped(false);
+        }
+      } catch (err) {
+        if (isMounted) {
+          const detail = err.response?.data?.detail || "Flashcards not ready yet.";
+          setFlashcardsError(typeof detail === "string" ? detail : JSON.stringify(detail));
+        }
+      } finally {
+        if (isMounted) setLoadingFlashcards(false);
+      }
+
+      // 4. Fetch Transcript
       try {
         setLoadingTranscript(true);
         setTranscriptError("");
-        const res = await lecturesAPI.getTranscript(selectedLecture.id);
-        if (isMounted) {
-          setTranscriptData(res.data);
-        }
+        const res = await lecturesAPI.getTranscript(lectureId);
+        if (isMounted) setTranscriptData(res.data);
       } catch (err) {
         if (isMounted) {
           const detail = err.response?.data?.detail || "Transcript could not be loaded.";
@@ -204,11 +294,11 @@ export default function App() {
         );
 
         if (res.data.processing_status === "completed") {
-          fetchTranscript();
+          fetchAllArtifacts(selectedLecture.id);
         } else if (res.data.processing_status === "failed") {
           setTranscriptError(res.data.error_message || "Processing failed.");
         } else {
-          pollTimer = setTimeout(pollStatus, 1800);
+          pollTimer = setTimeout(pollStatus, 1600);
         }
       } catch (err) {
         console.error("Status polling error:", err);
@@ -216,8 +306,17 @@ export default function App() {
     };
 
     if (selectedLecture.processing_status === "completed") {
-      fetchTranscript();
-    } else if (["uploaded", "extracting", "transcribing"].includes(selectedLecture.processing_status)) {
+      fetchAllArtifacts(selectedLecture.id);
+    } else if (
+      [
+        "uploaded",
+        "extracting",
+        "transcribing",
+        "summarizing",
+        "extracting_keywords",
+        "generating_flashcards",
+      ].includes(selectedLecture.processing_status)
+    ) {
       pollStatus();
     } else if (selectedLecture.processing_status === "failed") {
       setTranscriptError(selectedLecture.error_message || "Processing failed.");
@@ -228,6 +327,36 @@ export default function App() {
       if (pollTimer) clearTimeout(pollTimer);
     };
   }, [selectedLecture?.id, selectedLecture?.processing_status]);
+
+  // Flashcards keyboard navigation (Arrows & Space)
+  useEffect(() => {
+    if (!selectedLecture || modalTab !== "flashcards" || flashcardViewMode !== "carousel") {
+      return;
+    }
+    const cards = flashcardsData?.cards || [];
+    if (cards.length === 0) return;
+
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") {
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setIsCardFlipped(false);
+        setCurrentCardIndex((prev) => (prev + 1 < cards.length ? prev + 1 : 0));
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setIsCardFlipped(false);
+        setCurrentCardIndex((prev) => (prev - 1 >= 0 ? prev - 1 : cards.length - 1));
+      } else if (e.key === " " || e.key === "Enter") {
+        e.preventDefault();
+        setIsCardFlipped((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedLecture, modalTab, flashcardViewMode, flashcardsData]);
 
   const handleRetryProcessing = async (lectureId) => {
     try {
@@ -278,6 +407,57 @@ export default function App() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handleCopySummary = () => {
+    if (!summaryData?.summary_text) return;
+    navigator.clipboard.writeText(summaryData.summary_text);
+    setCopiedSummary(true);
+    setTimeout(() => setCopiedSummary(false), 2200);
+  };
+
+  const handleDownloadSummary = () => {
+    if (!summaryData?.summary_text || !selectedLecture) return;
+    const content = `SUMMIFY LECTURE SUMMARY
+Lecture: ${selectedLecture.title}
+Date: ${new Date(summaryData.created_at).toLocaleDateString()}
+Model: ${summaryData.model}
+
+SUMMARY:
+${summaryData.summary_text}
+
+${
+  summaryData.key_points && summaryData.key_points.length > 0
+    ? `\nKEY HIGHLIGHTS:\n${summaryData.key_points.map((p, i) => `${i + 1}. ${p}`).join("\n")}`
+    : ""
+}
+`;
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeTitle = selectedLecture.title.replace(/[^a-zA-Z0-9_-]/g, "_");
+    link.href = url;
+    link.download = `${safeTitle}_summary.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleRegenerateFlashcards = async () => {
+    if (!selectedLecture) return;
+    try {
+      setRegeneratingCards(true);
+      const res = await lecturesAPI.generateFlashcards(selectedLecture.id, Number(flashcardCountSelect));
+      setFlashcardsData(res.data);
+      setCurrentCardIndex(0);
+      setIsCardFlipped(false);
+      showAlert("success", `Generated ${res.data.total_cards || res.data.cards?.length} flashcards!`);
+    } catch (err) {
+      showAlert("danger", err.response?.data?.detail || "Failed to generate flashcards.");
+    } finally {
+      setRegeneratingCards(false);
+    }
   };
 
   // Auth Handlers
@@ -733,7 +913,7 @@ export default function App() {
                     className="lecture-card"
                     onClick={() => {
                       setSelectedLecture(lecture);
-                      setModalTab("transcript");
+                      setModalTab(lecture.processing_status === "completed" ? "summary" : "transcript");
                     }}
                   >
                     <div className="card-top">
@@ -748,15 +928,23 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap" }}>
                       <span className={`status-badge ${lecture.processing_status}`}>
                         {lecture.processing_status === "completed" && <CheckCircle2 size={12} />}
                         {lecture.processing_status === "extracting" && <RefreshCw size={12} className="spin-animation" />}
                         {lecture.processing_status === "transcribing" && <Activity size={12} className="pulse-animation" />}
+                        {lecture.processing_status === "summarizing" && <RefreshCw size={12} className="spin-animation" />}
+                        {lecture.processing_status === "extracting_keywords" && <RefreshCw size={12} className="spin-animation" />}
+                        {lecture.processing_status === "generating_flashcards" && <RefreshCw size={12} className="spin-animation" />}
                         {lecture.processing_status === "failed" && <AlertCircle size={12} />}
                         {lecture.processing_status === "uploaded" && <Clock size={12} />}
-                        {lecture.processing_status}
+                        {lecture.processing_status.replace(/_/g, " ")}
                       </span>
+                      {lecture.processing_status === "completed" && (
+                        <span className="stat-pill" style={{ fontSize: "0.68rem", padding: "0.15rem 0.45rem" }}>
+                          <Sparkles size={10} color="var(--accent-sage-light)" /> Summary & Cards
+                        </span>
+                      )}
                     </div>
 
                     <div className="card-meta-row">
@@ -767,14 +955,14 @@ export default function App() {
                     <div className="card-actions">
                       <button
                         className="btn btn-secondary btn-icon"
-                        title="View Processing & Transcript"
+                        title="View Summary & Materials"
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedLecture(lecture);
-                          setModalTab("transcript");
+                          setModalTab(lecture.processing_status === "completed" ? "summary" : "transcript");
                         }}
                       >
-                        <FileText size={16} />
+                        <Eye size={16} />
                       </button>
                       <a
                         href={lecturesAPI.downloadFileUrl(lecture.id)}
@@ -849,291 +1037,662 @@ export default function App() {
               </span>
             </div>
 
+            {/* Stepper & Failure Alert (shown while processing or failed) */}
+            {(() => {
+              const currentStatus = selectedLecture.processing_status;
+              const isFailed = currentStatus === "failed";
+              const isProcessing = ["uploaded", "extracting", "transcribing", "summarizing", "extracting_keywords", "generating_flashcards"].includes(currentStatus);
+
+              if (!isProcessing && !isFailed && modalTab !== "transcript") {
+                return null;
+              }
+
+              const cat = getFileCategory(selectedLecture.file_type, selectedLecture.original_filename);
+              const steps = [
+                { key: "uploaded", label: "Uploaded" },
+                { key: "extracting", label: cat === "audio" || cat === "video" ? "Transcribe" : "Extract" },
+                { key: "summarizing", label: "Summarize" },
+                { key: "extracting_keywords", label: "Keywords" },
+                { key: "generating_flashcards", label: "Flashcards" },
+                { key: "completed", label: "Completed" },
+              ];
+
+              const stepKeys = ["uploaded", "extracting", "summarizing", "extracting_keywords", "generating_flashcards", "completed"];
+              let currentIndex = stepKeys.indexOf(currentStatus);
+              if (currentStatus === "transcribing") currentIndex = 1;
+              if (isFailed) currentIndex = Math.max(1, currentIndex);
+              else if (currentStatus === "completed") currentIndex = steps.length - 1;
+              else if (currentIndex === -1) currentIndex = 0;
+
+              const progressPercent = (currentIndex / (steps.length - 1)) * 100;
+
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginBottom: "0.5rem" }}>
+                  <div className="stepper-card">
+                    <div className="stepper-flow">
+                      <div className="step-line">
+                        <div
+                          className="step-line-progress"
+                          style={{
+                            width: `${progressPercent}%`,
+                            background: isFailed ? "var(--danger)" : "var(--success)",
+                          }}
+                        />
+                      </div>
+                      {steps.map((st, idx) => {
+                        let nodeClass = "step-node";
+                        let circleContent = idx + 1;
+
+                        const isStepActive =
+                          st.key === currentStatus || (st.key === "extracting" && currentStatus === "transcribing");
+
+                        if (currentStatus === "completed" || idx < currentIndex) {
+                          nodeClass += " completed";
+                          circleContent = <Check size={16} />;
+                        } else if (isStepActive) {
+                          nodeClass += " active";
+                          circleContent = <RefreshCw size={16} className="spin-animation" />;
+                        } else if (isFailed && idx === currentIndex) {
+                          nodeClass += " failed";
+                          circleContent = <AlertCircle size={16} />;
+                        }
+
+                        return (
+                          <div key={st.key} className={nodeClass}>
+                            <div className="step-circle">{circleContent}</div>
+                            <span className="step-label">{st.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="live-status-card">
+                      <div className="live-status-left">
+                        <span
+                          className={`live-status-dot ${isProcessing ? "active" : ""}`}
+                          style={{
+                            background:
+                              currentStatus === "completed"
+                                ? "var(--success)"
+                                : isFailed
+                                ? "var(--danger)"
+                                : "var(--warning)",
+                          }}
+                        />
+                        <span style={{ fontWeight: 600 }}>
+                          {selectedLecture.status_message ||
+                            (currentStatus === "completed"
+                              ? "All artifacts processed and stored in database."
+                              : isFailed
+                              ? "Processing failed"
+                              : "Queued for processing...")}
+                        </span>
+                      </div>
+                      {isProcessing && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                          <RefreshCw size={12} className="spin-animation" />
+                          <span>AI Pipeline Active</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {isFailed && (
+                    <div className="failure-box">
+                      <div className="failure-header">
+                        <AlertCircle size={18} />
+                        <span>Processing Failure</span>
+                      </div>
+                      <div className="failure-message">
+                        {selectedLecture.error_message || transcriptError || "An error occurred during pipeline execution."}
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.5rem" }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => handleRetryProcessing(selectedLecture.id)}
+                          disabled={retrying}
+                        >
+                          <RotateCcw size={14} className={retrying ? "spin-animation" : ""} />
+                          {retrying ? "Retrying..." : "Retry Processing"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Tab navigation */}
             <div className="tab-nav">
+              <button
+                type="button"
+                className={`tab-nav-btn ${modalTab === "summary" ? "active" : ""}`}
+                onClick={() => setModalTab("summary")}
+              >
+                <Sparkles size={14} />
+                <span>Summary</span>
+              </button>
+              <button
+                type="button"
+                className={`tab-nav-btn ${modalTab === "keywords" ? "active" : ""}`}
+                onClick={() => setModalTab("keywords")}
+              >
+                <Tag size={14} />
+                <span>Key Concepts</span>
+                {keywordsData?.keywords?.length > 0 && (
+                  <span className="tab-count-badge">{keywordsData.keywords.length}</span>
+                )}
+              </button>
+              <button
+                type="button"
+                className={`tab-nav-btn ${modalTab === "flashcards" ? "active" : ""}`}
+                onClick={() => setModalTab("flashcards")}
+              >
+                <Layers size={14} />
+                <span>Flashcards</span>
+                {flashcardsData?.cards?.length > 0 && (
+                  <span className="tab-count-badge">{flashcardsData.cards.length}</span>
+                )}
+              </button>
               <button
                 type="button"
                 className={`tab-nav-btn ${modalTab === "transcript" ? "active" : ""}`}
                 onClick={() => setModalTab("transcript")}
               >
-                Processing & Transcript
+                <FileText size={14} />
+                <span>Full Transcript</span>
               </button>
               <button
                 type="button"
                 className={`tab-nav-btn ${modalTab === "details" ? "active" : ""}`}
                 onClick={() => setModalTab("details")}
               >
-                File Details
+                <BookOpen size={14} />
+                <span>File Details</span>
               </button>
             </div>
 
-            {/* TAB 1: PROCESSING & TRANSCRIPT */}
-            {modalTab === "transcript" && (
-              <>
-                {/* 1. Stepper Card */}
-                {(() => {
-                  const cat = getFileCategory(selectedLecture.file_type, selectedLecture.original_filename);
-                  let steps = [];
-                  if (cat === "video") {
-                    steps = [
-                      { key: "uploaded", label: "Uploaded" },
-                      { key: "extracting", label: "Extract Audio" },
-                      { key: "transcribing", label: "Transcribing" },
-                      { key: "completed", label: "Completed" },
-                    ];
-                  } else if (cat === "audio") {
-                    steps = [
-                      { key: "uploaded", label: "Uploaded" },
-                      { key: "transcribing", label: "Transcribing" },
-                      { key: "completed", label: "Completed" },
-                    ];
-                  } else {
-                    steps = [
-                      { key: "uploaded", label: "Uploaded" },
-                      { key: "extracting", label: "Extracting" },
-                      { key: "completed", label: "Completed" },
-                    ];
-                  }
-
-                  const currentStatus = selectedLecture.processing_status;
-                  const isFailed = currentStatus === "failed";
-                  const stepKeys = steps.map((s) => s.key);
-                  let currentIndex = stepKeys.indexOf(currentStatus);
-                  if (isFailed) {
-                    currentIndex = 1;
-                  } else if (currentStatus === "completed") {
-                    currentIndex = steps.length - 1;
-                  } else if (currentIndex === -1) {
-                    currentIndex = 0;
-                  }
-
-                  const progressPercent = (currentIndex / (steps.length - 1)) * 100;
-
-                  return (
-                    <div className="stepper-card">
-                      <div className="stepper-flow">
-                        <div className="step-line">
-                          <div
-                            className="step-line-progress"
-                            style={{
-                              width: `${progressPercent}%`,
-                              background: isFailed ? "var(--danger)" : "var(--success)",
-                            }}
-                          />
-                        </div>
-                        {steps.map((st, idx) => {
-                          let nodeClass = "step-node";
-                          let circleContent = idx + 1;
-
-                          if (currentStatus === "completed" || idx < currentIndex) {
-                            nodeClass += " completed";
-                            circleContent = <Check size={16} />;
-                          } else if (st.key === currentStatus) {
-                            nodeClass += " active";
-                            circleContent = <RefreshCw size={16} className="spin-animation" />;
-                          } else if (isFailed && idx === currentIndex) {
-                            nodeClass += " failed";
-                            circleContent = <AlertCircle size={16} />;
-                          }
-
-                          return (
-                            <div key={st.key} className={nodeClass}>
-                              <div className="step-circle">{circleContent}</div>
-                              <span className="step-label">{st.label}</span>
-                            </div>
-                          );
-                        })}
+            {/* TAB 1: SUMMARY */}
+            {modalTab === "summary" && (
+              <div className="summary-container">
+                {loadingSummary ? (
+                  <div style={{ padding: "3rem 1rem", textAlign: "center" }}>
+                    <RefreshCw size={30} className="spin-animation" color="var(--accent-cream)" />
+                    <p style={{ color: "var(--text-muted)", marginTop: "0.75rem" }}>Generating concise summary with BART AI...</p>
+                  </div>
+                ) : summaryData ? (
+                  <>
+                    <div className="summary-toolbar">
+                      <div className="summary-stats-pills">
+                        <span className="stat-pill">
+                          <FileCheck size={13} />
+                          <strong>{summaryData.word_count || 0}</strong> words
+                        </span>
+                        <span className="stat-pill">
+                          <strong>{summaryData.character_count || 0}</strong> chars
+                        </span>
+                        <span className="stat-pill">
+                          Chunks: <strong>{summaryData.chunks_processed || 1}</strong>
+                        </span>
+                        <span className="stat-pill">
+                          Model: <strong>{summaryData.model || "facebook/bart-large-cnn"}</strong>
+                        </span>
                       </div>
 
-                      <div className="live-status-card">
-                        <div className="live-status-left">
-                          <span
-                            className={`live-status-dot ${["extracting", "transcribing"].includes(currentStatus) ? "active" : ""}`}
-                            style={{
-                              background:
-                                currentStatus === "completed"
-                                  ? "var(--success)"
-                                  : currentStatus === "failed"
-                                  ? "var(--danger)"
-                                  : "var(--warning)",
-                            }}
-                          />
-                          <span style={{ fontWeight: 600 }}>
-                            {selectedLecture.status_message ||
-                              (currentStatus === "completed"
-                                ? "Content processed and saved to database"
-                                : currentStatus === "failed"
-                                ? "Processing failed"
-                                : "Queued for processing...")}
-                          </span>
-                        </div>
-                        {["uploaded", "extracting", "transcribing"].includes(currentStatus) && (
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.78rem", color: "var(--text-muted)" }}>
-                            <RefreshCw size={12} className="spin-animation" />
-                            <span>Live sync</span>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleCopySummary}
+                          title="Copy Summary"
+                        >
+                          {copiedSummary ? (
+                            <>
+                              <Check size={14} color="#a7f3d0" /> Copied!
+                            </>
+                          ) : (
+                            <>
+                              <Copy size={14} /> Copy Summary
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleDownloadSummary}
+                          title="Download Summary as .txt"
+                        >
+                          <Download size={14} /> Export .txt
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="summary-content-grid">
+                      <div className="summary-text-box">
+                        {summaryData.summary_text.split("\n\n").map((para, pIdx) => (
+                          <p key={pIdx}>{para}</p>
+                        ))}
+                      </div>
+
+                      {summaryData.key_points && summaryData.key_points.length > 0 && (
+                        <div className="key-points-card">
+                          <div className="key-points-header">
+                            <CheckCircle2 size={18} color="var(--accent-sage-light)" />
+                            <span>Key Highlights & Concept Takeaways</span>
                           </div>
-                        )}
-                      </div>
+                          <div className="key-points-list">
+                            {summaryData.key_points.map((point, kIdx) => (
+                              <div key={kIdx} className="key-point-item">
+                                <Check size={16} className="key-point-icon" />
+                                <span>{point}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  );
-                })()}
-
-                {/* 2. Failure State */}
-                {selectedLecture.processing_status === "failed" && (
-                  <div className="failure-box">
-                    <div className="failure-header">
-                      <AlertCircle size={18} />
-                      <span>Processing Failure</span>
-                    </div>
-                    <div className="failure-message">
-                      {selectedLecture.error_message || transcriptError || "An error occurred during extraction or transcription."}
-                    </div>
-                    {(selectedLecture.error_message?.includes("HF_TOKEN") ||
-                      transcriptError?.includes("HF_TOKEN") ||
-                      selectedLecture.error_message?.includes("Hugging Face")) && (
-                      <p style={{ fontSize: "0.82rem", color: "var(--accent-cream)", marginTop: "0.25rem" }}>
-                        💡 <strong>Hugging Face Token Required:</strong> Audio and video transcription use OpenAI Whisper hosted inference. Add <code>HF_TOKEN=hf_...</code> to your <code>.env</code> file, then click Retry below.
-                      </p>
-                    )}
-                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.5rem" }}>
+                  </>
+                ) : (
+                  <div style={{ padding: "2.5rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
+                    <p>{summaryError || "Summary is not available yet."}</p>
+                    {selectedLecture.processing_status === "completed" && (
                       <button
                         type="button"
-                        className="btn btn-primary"
+                        className="btn btn-secondary"
+                        style={{ marginTop: "1rem" }}
                         onClick={() => handleRetryProcessing(selectedLecture.id)}
-                        disabled={retrying}
                       >
-                        <RotateCcw size={14} className={retrying ? "spin-animation" : ""} />
-                        {retrying ? "Retrying..." : "Retry Processing"}
+                        <RotateCcw size={14} /> Generate Summary
                       </button>
-                    </div>
+                    )}
                   </div>
                 )}
+              </div>
+            )}
 
-                {/* 3. In Progress Spinner */}
-                {["uploaded", "extracting", "transcribing"].includes(selectedLecture.processing_status) && (
-                  <div style={{ padding: "2.5rem 1rem", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.85rem" }}>
-                    <RefreshCw size={32} className="spin-animation" color="var(--accent-sage-light)" />
-                    <p style={{ color: "var(--text-secondary)", fontSize: "0.92rem" }}>
-                      {selectedLecture.processing_status === "transcribing"
-                        ? "Hugging Face Whisper model is transcribing speech..."
-                        : "Extracting readable content from document..."}
-                    </p>
+            {/* TAB 2: KEY CONCEPTS */}
+            {modalTab === "keywords" && (
+              <div className="keywords-container">
+                {loadingKeywords ? (
+                  <div style={{ padding: "3rem 1rem", textAlign: "center" }}>
+                    <RefreshCw size={30} className="spin-animation" color="var(--accent-cream)" />
+                    <p style={{ color: "var(--text-muted)", marginTop: "0.75rem" }}>Extracting concepts via TF-IDF...</p>
                   </div>
-                )}
-
-                {/* 4. Transcript Content Viewer */}
-                {selectedLecture.processing_status === "completed" && (
+                ) : keywordsData ? (
                   <>
-                    {loadingTranscript ? (
-                      <div style={{ padding: "2.5rem 1rem", textAlign: "center" }}>
-                        <RefreshCw size={28} className="spin-animation" color="var(--accent-cream)" />
-                        <p style={{ color: "var(--text-muted)", marginTop: "0.75rem" }}>Loading transcript...</p>
+                    <div className="keywords-toolbar">
+                      <div className="summary-stats-pills">
+                        <span className="stat-pill">
+                          <Tag size={13} />
+                          <strong>{keywordsData.keywords?.length || 0}</strong> Key Concepts
+                        </span>
+                        <span className="stat-pill">
+                          Method: <strong>{keywordsData.method || "TF-IDF (scikit-learn)"}</strong>
+                        </span>
                       </div>
-                    ) : transcriptData ? (
-                      <div className="transcript-container">
-                        {/* Toolbar */}
-                        <div className="transcript-toolbar">
-                          <div className="transcript-stats-pills">
-                            <span className="stat-pill">
-                              <FileCheck size={13} />
-                              <strong>{transcriptData.word_count || 0}</strong> words
-                            </span>
-                            <span className="stat-pill">
-                              <strong>{transcriptData.character_count || 0}</strong> chars
-                            </span>
-                            <span className="stat-pill">
-                              Source:{" "}
-                              <strong>{transcriptData.source_type === "audio" ? "Whisper Transcription" : "Document Extraction"}</strong>
-                            </span>
-                            {transcriptData.metadata?.extractor && (
-                              <span className="stat-pill">
-                                Engine: <strong>{transcriptData.metadata.extractor}</strong>
-                              </span>
-                            )}
-                            {transcriptData.metadata?.total_pages && (
-                              <span className="stat-pill">
-                                Pages: <strong>{transcriptData.metadata.total_pages}</strong>
-                              </span>
-                            )}
-                          </div>
 
-                          <div className="transcript-actions">
-                            <div className="transcript-search-wrap">
-                              <Search size={14} />
-                              <input
-                                type="text"
-                                className="input-control"
-                                placeholder="Search in transcript..."
-                                value={transcriptSearch}
-                                onChange={(e) => setTranscriptSearch(e.target.value)}
-                              />
+                      <div className="transcript-search-wrap">
+                        <Search size={14} />
+                        <input
+                          type="text"
+                          className="input-control"
+                          placeholder="Filter concepts..."
+                          value={keywordSearch}
+                          onChange={(e) => setKeywordSearch(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {(() => {
+                      const list = (keywordsData.keywords || []).filter((kw) =>
+                        kw.term.toLowerCase().includes(keywordSearch.trim().toLowerCase())
+                      );
+                      if (list.length === 0) {
+                        return (
+                          <div style={{ padding: "2.5rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
+                            No concepts found matching "{keywordSearch}".
+                          </div>
+                        );
+                      }
+                      const maxScore = Math.max(...list.map((k) => k.score), 0.1);
+                      return (
+                        <div className="keywords-grid">
+                          {list.map((kw, idx) => (
+                            <div key={idx} className="keyword-card">
+                              <div className="keyword-card-top">
+                                <span className="keyword-term">{kw.term}</span>
+                                <span className="keyword-freq-pill">{kw.frequency}x</span>
+                              </div>
+                              <div className="keyword-bar-wrap">
+                                <div className="keyword-bar-info">
+                                  <span>Relevance</span>
+                                  <strong>{kw.score.toFixed(3)}</strong>
+                                </div>
+                                <div className="keyword-bar-track">
+                                  <div
+                                    className="keyword-bar-fill"
+                                    style={{ width: `${Math.min(100, Math.round((kw.score / maxScore) * 100))}%` }}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              onClick={handleCopyTranscript}
-                              title="Copy to clipboard"
-                            >
-                              {copiedTranscript ? (
-                                <>
-                                  <Check size={14} color="#a7f3d0" /> Copied!
-                                </>
-                              ) : (
-                                <>
-                                  <Copy size={14} /> Copy
-                                </>
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              onClick={handleDownloadTranscript}
-                              title="Download as text file"
-                            >
-                              <Download size={14} /> Export .txt
-                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </>
+                ) : (
+                  <div style={{ padding: "2.5rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
+                    {keywordsError || "No keywords available yet."}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 3: FLASHCARDS */}
+            {modalTab === "flashcards" && (
+              <div className="flashcards-container">
+                {loadingFlashcards ? (
+                  <div style={{ padding: "3rem 1rem", textAlign: "center" }}>
+                    <RefreshCw size={30} className="spin-animation" color="var(--accent-cream)" />
+                    <p style={{ color: "var(--text-muted)", marginTop: "0.75rem" }}>Generating Q&A flashcards with Llama 3.1 AI...</p>
+                  </div>
+                ) : flashcardsData && flashcardsData.cards && flashcardsData.cards.length > 0 ? (
+                  <>
+                    <div className="flashcards-header-bar">
+                      <div className="view-mode-toggles">
+                        <button
+                          type="button"
+                          className={`view-mode-btn ${flashcardViewMode === "carousel" ? "active" : ""}`}
+                          onClick={() => {
+                            setFlashcardViewMode("carousel");
+                            setIsCardFlipped(false);
+                          }}
+                        >
+                          <Layers size={13} />
+                          <span>Study Mode</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`view-mode-btn ${flashcardViewMode === "list" ? "active" : ""}`}
+                          onClick={() => setFlashcardViewMode("list")}
+                        >
+                          <List size={13} />
+                          <span>All Cards ({flashcardsData.cards.length})</span>
+                        </button>
+                      </div>
+
+                      <div className="flashcard-regen-controls">
+                        <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Target:</span>
+                        <select
+                          className="card-count-select"
+                          value={flashcardCountSelect}
+                          onChange={(e) => setFlashcardCountSelect(Number(e.target.value))}
+                          disabled={regeneratingCards}
+                        >
+                          <option value={5}>5 Cards</option>
+                          <option value={10}>10 Cards</option>
+                          <option value={15}>15 Cards</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleRegenerateFlashcards}
+                          disabled={regeneratingCards}
+                          title="Regenerate flashcards from current summary"
+                        >
+                          <RefreshCw size={14} className={regeneratingCards ? "spin-animation" : ""} />
+                          {regeneratingCards ? "Generating..." : "Regenerate"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Mode 1: 3D Flip Carousel */}
+                    {flashcardViewMode === "carousel" && (
+                      <div className="flashcard-carousel-stage">
+                        <div className="flashcard-progress-bar-wrap">
+                          <span>
+                            Card {currentCardIndex + 1} of {flashcardsData.cards.length}
+                          </span>
+                          <div className="flashcard-progress-track">
+                            <div
+                              className="flashcard-progress-fill"
+                              style={{
+                                width: `${((currentCardIndex + 1) / flashcardsData.cards.length) * 100}%`,
+                              }}
+                            />
                           </div>
+                          <span>{Math.round(((currentCardIndex + 1) / flashcardsData.cards.length) * 100)}%</span>
                         </div>
 
-                        {/* Scroll Canvas */}
-                        <div className="transcript-scroll-canvas">
-                          {(() => {
-                            const paragraphs = transcriptData.text.split("\n\n").filter((p) => p.trim());
-                            const searchLower = transcriptSearch.trim().toLowerCase();
+                        {(() => {
+                          const card = flashcardsData.cards[currentCardIndex];
+                          return (
+                            <div
+                              className="flashcard-perspective-box"
+                              onClick={() => setIsCardFlipped((prev) => !prev)}
+                              title="Click to flip card"
+                            >
+                              <div className={`flashcard-3d-card ${isCardFlipped ? "flipped" : ""}`}>
+                                <div className="flashcard-face front">
+                                  <div className="flashcard-top-row">
+                                    <span className="flashcard-category-badge">{card?.category || "Concept"}</span>
+                                    <span className="flashcard-side-indicator">QUESTION</span>
+                                  </div>
+                                  <div className="flashcard-body-text">{card?.question}</div>
+                                  <div className="flashcard-footer-prompt">
+                                    <span className="flashcard-flip-cue">
+                                      <RotateCcw size={13} /> Click to reveal answer
+                                    </span>
+                                    <span style={{ color: "var(--text-muted)" }}>[Space to flip]</span>
+                                  </div>
+                                </div>
 
-                            if (paragraphs.length === 0) {
-                              return <p style={{ color: "var(--text-muted)" }}>[No text available in transcript]</p>;
-                            }
+                                <div className="flashcard-face back">
+                                  <div className="flashcard-top-row">
+                                    <span className="flashcard-category-badge">{card?.category || "Concept"}</span>
+                                    <span className="flashcard-side-indicator" style={{ color: "var(--accent-sage-light)" }}>
+                                      ANSWER
+                                    </span>
+                                  </div>
+                                  <div className="flashcard-body-text answer-text">{card?.answer}</div>
+                                  <div className="flashcard-footer-prompt">
+                                    <span className="flashcard-flip-cue">
+                                      <RotateCcw size={13} /> Click to flip back
+                                    </span>
+                                    <span style={{ color: "var(--text-muted)" }}>[Space to flip]</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
 
-                            return paragraphs.map((para, idx) => {
-                              if (!searchLower) {
-                                return <p key={idx}>{para}</p>;
-                              }
-                              const regex = new RegExp(`(${searchLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
-                              const parts = para.split(regex);
-                              return (
-                                <p key={idx}>
-                                  {parts.map((part, pIdx) =>
-                                    part.toLowerCase() === searchLower ? (
-                                      <mark key={pIdx} className="search-highlight">
-                                        {part}
-                                      </mark>
-                                    ) : (
-                                      part
-                                    )
-                                  )}
-                                </p>
-                              );
-                            });
-                          })()}
+                        <div className="flashcard-nav-controls">
+                          <button
+                            type="button"
+                            className="flashcard-nav-btn"
+                            onClick={() => {
+                              setIsCardFlipped(false);
+                              setCurrentCardIndex((prev) => (prev > 0 ? prev - 1 : flashcardsData.cards.length - 1));
+                            }}
+                            title="Previous card (Left Arrow)"
+                          >
+                            <ChevronLeft size={22} />
+                          </button>
+
+                          <button
+                            type="button"
+                            className="flashcard-flip-btn"
+                            onClick={() => setIsCardFlipped((prev) => !prev)}
+                          >
+                            <RotateCcw size={15} />
+                            <span>{isCardFlipped ? "Show Question" : "Reveal Answer"}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="flashcard-nav-btn"
+                            onClick={() => {
+                              setIsCardFlipped(false);
+                              setCurrentCardIndex((prev) => (prev + 1 < flashcardsData.cards.length ? prev + 1 : 0));
+                            }}
+                            title="Next card (Right Arrow)"
+                          >
+                            <ChevronRight size={22} />
+                          </button>
+                        </div>
+                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          Keyboard shortcuts: [←] Previous • [→] Next • [Space] Flip
                         </div>
                       </div>
-                    ) : (
-                      <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>
-                        {transcriptError || "Transcript record could not be loaded."}
+                    )}
+
+                    {/* Mode 2: All Cards List View */}
+                    {flashcardViewMode === "list" && (
+                      <div className="flashcards-list-view">
+                        {flashcardsData.cards.map((card, idx) => (
+                          <div key={card.id || idx} className="flashcard-list-item">
+                            <div className="flashcard-list-header">
+                              <span className="flashcard-number-tag">CARD #{idx + 1}</span>
+                              <span className="flashcard-category-badge">{card.category || "Key Concept"}</span>
+                            </div>
+                            <div className="flashcard-list-qa">
+                              <div className="flashcard-list-q">Q: {card.question}</div>
+                              <div className="flashcard-list-a">A: {card.answer}</div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </>
+                ) : (
+                  <div style={{ padding: "2.5rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
+                    <p>{flashcardsError || "No flashcards generated yet."}</p>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ marginTop: "1rem" }}
+                      onClick={handleRegenerateFlashcards}
+                      disabled={regeneratingCards}
+                    >
+                      <Sparkles size={16} /> Generate Flashcards Now
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 4: FULL TRANSCRIPT */}
+            {modalTab === "transcript" && (
+              <>
+                {loadingTranscript ? (
+                  <div style={{ padding: "2.5rem 1rem", textAlign: "center" }}>
+                    <RefreshCw size={28} className="spin-animation" color="var(--accent-cream)" />
+                    <p style={{ color: "var(--text-muted)", marginTop: "0.75rem" }}>Loading transcript...</p>
+                  </div>
+                ) : transcriptData ? (
+                  <div className="transcript-container">
+                    <div className="transcript-toolbar">
+                      <div className="transcript-stats-pills">
+                        <span className="stat-pill">
+                          <FileCheck size={13} />
+                          <strong>{transcriptData.word_count || 0}</strong> words
+                        </span>
+                        <span className="stat-pill">
+                          <strong>{transcriptData.character_count || 0}</strong> chars
+                        </span>
+                        <span className="stat-pill">
+                          Source:{" "}
+                          <strong>{transcriptData.source_type === "audio" ? "Whisper Transcription" : "Document Extraction"}</strong>
+                        </span>
+                        {transcriptData.metadata?.extractor && (
+                          <span className="stat-pill">
+                            Engine: <strong>{transcriptData.metadata.extractor}</strong>
+                          </span>
+                        )}
+                        {transcriptData.metadata?.total_pages && (
+                          <span className="stat-pill">
+                            Pages: <strong>{transcriptData.metadata.total_pages}</strong>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="transcript-actions">
+                        <div className="transcript-search-wrap">
+                          <Search size={14} />
+                          <input
+                            type="text"
+                            className="input-control"
+                            placeholder="Search in transcript..."
+                            value={transcriptSearch}
+                            onChange={(e) => setTranscriptSearch(e.target.value)}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleCopyTranscript}
+                          title="Copy to clipboard"
+                        >
+                          {copiedTranscript ? (
+                            <>
+                              <Check size={14} color="#a7f3d0" /> Copied!
+                            </>
+                          ) : (
+                            <>
+                              <Copy size={14} /> Copy
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleDownloadTranscript}
+                          title="Download as text file"
+                        >
+                          <Download size={14} /> Export .txt
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="transcript-scroll-canvas">
+                      {(() => {
+                        const paragraphs = transcriptData.text.split("\n\n").filter((p) => p.trim());
+                        const searchLower = transcriptSearch.trim().toLowerCase();
+
+                        if (paragraphs.length === 0) {
+                          return <p style={{ color: "var(--text-muted)" }}>[No text available in transcript]</p>;
+                        }
+
+                        return paragraphs.map((para, idx) => {
+                          if (!searchLower) {
+                            return <p key={idx}>{para}</p>;
+                          }
+                          const regex = new RegExp(`(${searchLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+                          const parts = para.split(regex);
+                          return (
+                            <p key={idx}>
+                              {parts.map((part, pIdx) =>
+                                part.toLowerCase() === searchLower ? (
+                                  <mark key={pIdx} className="search-highlight">
+                                    {part}
+                                  </mark>
+                                ) : (
+                                  part
+                                )
+                              )}
+                            </p>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>
+                    {transcriptError || "Transcript record could not be loaded."}
+                  </div>
                 )}
               </>
             )}

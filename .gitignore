@@ -40,6 +40,8 @@ frontend/node_modules/
 *.local
 
 # User uploads & runtime temp files
+# Temp files
+scratch/
 uploads/*
 !uploads/.gitkeep
 
