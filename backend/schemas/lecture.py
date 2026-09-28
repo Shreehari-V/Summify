@@ -72,7 +72,7 @@ class FlashcardsRead(BaseModel):
     updated_at: Optional[datetime] = None
 
 class FlashcardGenerateRequest(BaseModel):
-    count: Optional[int] = Field(default=None, ge=1, le=25)
+    count: Optional[int] = Field(default=None, ge=1, le=10)
 
 class LectureRead(BaseModel):
     id: str

@@ -467,19 +467,21 @@ async def generate_flashcards_hf(
     if not settings.hf_token or not settings.hf_token.strip():
         raise ValueError("HF_TOKEN is missing. Please set your Hugging Face API token in .env.")
 
+    target_count = min(max(1, count), 10)
     kw_list = [k["term"] for k in keywords[:10]]
     kw_str = ", ".join(kw_list) if kw_list else "General lecture content"
 
     prompt = f"""You are an expert academic tutor creating flashcards for students.
-Create exactly {count} high-yield study flashcards based on the lecture summary and key concepts below.
+Create exactly {target_count} high-yield study flashcards based on the lecture summary and key concepts below.
 
 RULES:
-1. Every card must have a clear "question" testing a concept, mechanism, definition, or distinction.
-2. Every card must have a concise, accurate "answer" (1-3 sentences).
-3. NEVER generate multiple choice questions (no options like A, B, C, D, no "Which of the following").
-4. Both question and answer must be substantive and directly related to the material.
-5. Provide a relevant academic "category" for each card (e.g. "Definition", "Architecture", "Key Concept").
-6. Output ONLY a valid JSON array of objects with no surrounding conversation or markdown outside the array.
+1. You MUST generate EXACTLY {target_count} flashcards in the JSON array (no more, no less).
+2. Every card must have a clear "question" testing a concept, mechanism, definition, or distinction.
+3. Every card must have a concise, accurate "answer" (1-3 sentences).
+4. NEVER generate multiple choice questions (no options like A, B, C, D, no "Which of the following").
+5. Both question and answer must be substantive and directly related to the material.
+6. Provide a relevant academic "category" for each card (e.g. "Definition", "Architecture", "Key Concept").
+7. Output ONLY a valid JSON array of objects with no surrounding conversation or markdown outside the array.
 
 Format:
 [
@@ -534,16 +536,42 @@ Key Concepts:
                 raise RuntimeError("Failed to parse valid JSON flashcard output from LLM.")
 
         valid_cards = []
+        fallback_candidates = []
+
         for card in raw_cards:
+            if not isinstance(card, dict):
+                continue
+            q = str(card.get("question", "")).strip()
+            a = str(card.get("answer", "")).strip()
+            cat = str(card.get("category", "Key Concept")).strip() or "Key Concept"
+
             if validate_qa_pair(card, summary):
                 valid_cards.append({
                     "id": str(uuid.uuid4())[:8],
-                    "question": card["question"].strip(),
-                    "answer": card["answer"].strip(),
-                    "category": card.get("category", "Key Concept").strip(),
+                    "question": q,
+                    "answer": a,
+                    "category": cat,
                 })
+            elif len(q) >= 8 and len(a) >= 3:
+                mcq_pattern = r'(\b[A-D]\s*[\)\.:]|\bOption\s+[A-D]\b|\bWhich of the following\b|\bSelect the correct\b|\(A\)\s|\(B\)\s)'
+                if not re.search(mcq_pattern, q, re.IGNORECASE) and not re.search(mcq_pattern, a, re.IGNORECASE):
+                    placeholders = {"n/a", "none", "unknown", "tbd", "undefined", "true", "false", "yes", "no"}
+                    if a.lower() not in placeholders:
+                        fallback_candidates.append({
+                            "id": str(uuid.uuid4())[:8],
+                            "question": q,
+                            "answer": a,
+                            "category": cat,
+                        })
 
-        return valid_cards
+        # Backfill if strict validation produced fewer than target_count
+        for fb in fallback_candidates:
+            if len(valid_cards) >= target_count:
+                break
+            valid_cards.append(fb)
+
+        # Strictly slice to target_count to guarantee the requested number of cards
+        return valid_cards[:target_count]
 
 
 async def generate_flashcards_for_lecture(
@@ -555,7 +583,7 @@ async def generate_flashcards_for_lecture(
     if settings.db is None:
         raise RuntimeError("Database unavailable")
 
-    target_count = count or settings.default_flashcard_count or 10
+    target_count = min(count or settings.default_flashcard_count or 10, 10)
 
     # Retrieve summary or transcript to base flashcards on
     summary_doc = await settings.db.summaries.find_one({"lecture_id": lecture_id, "user_id": user_id})
@@ -812,7 +840,7 @@ async def process_lecture_background(lecture_id: str, user_id: str) -> None:
         # ---------------------------------------------------------
         # STEP 4: GENERATE FLASHCARDS (LLAMA 3.1)
         # ---------------------------------------------------------
-        target_card_count = settings.default_flashcard_count or 10
+        target_card_count = min(settings.default_flashcard_count or 10, 10)
         await update_lecture_status(
             lecture_id,
             status="generating_flashcards",

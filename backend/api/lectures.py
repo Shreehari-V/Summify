@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, status, Query
 from fastapi.responses import FileResponse
 from bson import ObjectId
 
@@ -318,6 +318,7 @@ async def get_lecture_flashcards(lecture_id: str, user: dict = Depends(get_curre
 async def regenerate_flashcards(
     lecture_id: str,
     payload: Optional[FlashcardGenerateRequest] = None,
+    count: Optional[int] = Query(default=None, ge=1, le=10),
     user: dict = Depends(get_current_user),
 ):
     """Regenerate flashcards on demand for a lecture scoped to the user."""
@@ -333,7 +334,14 @@ async def regenerate_flashcards(
     if not lec:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
 
-    card_count = payload.count if payload and payload.count else settings.default_flashcard_count or 10
+    # Support count from either JSON body or query param
+    req_count = None
+    if payload and payload.count is not None:
+        req_count = payload.count
+    elif count is not None:
+        req_count = count
+
+    card_count = min(req_count if req_count else settings.default_flashcard_count or 10, 10)
 
     try:
         flashcards_doc = await generate_flashcards_for_lecture(

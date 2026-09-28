@@ -448,13 +448,20 @@ ${
     if (!selectedLecture) return;
     try {
       setRegeneratingCards(true);
-      const res = await lecturesAPI.generateFlashcards(selectedLecture.id, Number(flashcardCountSelect));
+      const countToGen = Number(flashcardCountSelect) || 10;
+      const res = await lecturesAPI.generateFlashcards(selectedLecture.id, countToGen);
       setFlashcardsData(res.data);
       setCurrentCardIndex(0);
       setIsCardFlipped(false);
-      showAlert("success", `Generated ${res.data.total_cards || res.data.cards?.length} flashcards!`);
+      const totalCount = res.data.total_cards || res.data.cards?.length || countToGen;
+      showAlert("success", `Generated ${totalCount} flashcards!`);
     } catch (err) {
-      showAlert("danger", err.response?.data?.detail || "Failed to generate flashcards.");
+      const msg =
+        err.response?.data?.detail ||
+        (err.message?.includes("timeout")
+          ? "Generation timed out on the client. Please try again."
+          : "Failed to generate flashcards.");
+      showAlert("danger", typeof msg === "string" ? msg : JSON.stringify(msg));
     } finally {
       setRegeneratingCards(false);
     }
@@ -1432,8 +1439,8 @@ ${
                           disabled={regeneratingCards}
                         >
                           <option value={5}>5 Cards</option>
+                          <option value={8}>8 Cards</option>
                           <option value={10}>10 Cards</option>
-                          <option value={15}>15 Cards</option>
                         </select>
                         <button
                           type="button"
@@ -1447,6 +1454,13 @@ ${
                         </button>
                       </div>
                     </div>
+
+                    {regeneratingCards && (
+                      <div className="flashcard-generating-overlay">
+                        <RefreshCw size={15} className="spin-animation" color="var(--accent-cream)" />
+                        <span>Regenerating {flashcardCountSelect} flashcards with AI...</span>
+                      </div>
+                    )}
 
                     {/* Mode 1: 3D Flip Carousel */}
                     {flashcardViewMode === "carousel" && (

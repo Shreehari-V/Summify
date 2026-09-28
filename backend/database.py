@@ -1,6 +1,5 @@
-# backend/database.py
-
 import sys
+import urllib.request
 from motor.motor_asyncio import AsyncIOMotorClient
 from .config import Settings, settings
 
@@ -13,6 +12,15 @@ except ImportError:
 client: AsyncIOMotorClient | None = None
 
 
+def get_public_ip() -> str:
+    """Helper to detect current public IP for actionable diagnostics."""
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=2.5) as resp:
+            return resp.read().decode("utf-8").strip()
+    except Exception:
+        return "Unknown"
+
+
 async def connect_to_mongo() -> None:
     """Initialize MongoDB client and expose database handle via Settings.db."""
     global client
@@ -23,7 +31,8 @@ async def connect_to_mongo() -> None:
 
         client = AsyncIOMotorClient(
             settings.mongodb_uri,
-            serverSelectionTimeoutMS=5000,
+            serverSelectionTimeoutMS=4000,
+            connectTimeoutMS=4000,
             **kwargs
         )
         
@@ -33,15 +42,17 @@ async def connect_to_mongo() -> None:
         if not db_name or db_name.startswith("mongodb"):
             db_name = "summify"
 
-        Settings.db = client[db_name]
-
         # Verify connectivity with a quick ping
         await client.admin.command("ping")
+        Settings.db = client[db_name]
         print(f" Connected to MongoDB Atlas successfully (database: '{db_name}')")
     except Exception as e:
         Settings.db = None
+        ip = get_public_ip()
         print(f"❌ MongoDB connection failed: {e}")
-        print("💡 TIP: Ensure your current IP is whitelisted in MongoDB Atlas Network Access (0.0.0.0/0 for dev).")
+        print(f"👉 Current Public IP: {ip}")
+        print(f"👉 Fix: In MongoDB Atlas (cloud.mongodb.com) -> Security -> Network Access -> Add IP Address")
+        print(f"       Add your current IP ({ip}) or add '0.0.0.0/0' (allow from anywhere).")
 
 
 async def close_mongo_connection() -> None:

@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings, settings
 from .database import connect_to_mongo, close_mongo_connection
@@ -31,6 +31,13 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Auto-reconnect middleware: If DB was offline at boot, re-attempt on incoming request
+@app.middleware("http")
+async def db_auto_reconnect_middleware(request: Request, call_next):
+    if Settings.db is None and not request.url.path.startswith("/api/health"):
+        await connect_to_mongo()
+    return await call_next(request)
 
 # Robust CORS supporting localhost on any port (5173, 5174, 3000, 127.0.0.1, etc.)
 app.add_middleware(

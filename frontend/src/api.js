@@ -59,7 +59,8 @@ export const lecturesAPI = {
   getSummary: (id) => api.get(`/lectures/${id}/summary`),
   getKeywords: (id) => api.get(`/lectures/${id}/keywords`),
   getFlashcards: (id) => api.get(`/lectures/${id}/flashcards`),
-  generateFlashcards: (id, count) => api.post(`/lectures/${id}/generate-flashcards`, { count }),
+  generateFlashcards: (id, count) =>
+    api.post(`/lectures/${id}/generate-flashcards`, { count }, { timeout: 90000 }),
   retryProcessing: (id) => api.post(`/lectures/${id}/retry`),
   deleteLecture: (id) => api.delete(`/lectures/${id}`),
   downloadFileUrl: (id) => `${API_BASE_URL}/lectures/${id}/file`,
