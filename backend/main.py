@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings, settings
 from .database import connect_to_mongo, close_mongo_connection
-from .api import auth, lectures, health
+from .api import auth, lectures, health, admin
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -50,6 +50,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(lectures.router, prefix="/api/lectures", tags=["lectures"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(health.router, prefix="/api", tags=["health"])
 
 if __name__ == "__main__":

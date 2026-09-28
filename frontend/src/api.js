@@ -62,8 +62,20 @@ export const lecturesAPI = {
   generateFlashcards: (id, count) =>
     api.post(`/lectures/${id}/generate-flashcards`, { count }, { timeout: 90000 }),
   retryProcessing: (id) => api.post(`/lectures/${id}/retry`),
+  updateFlashcards: (id, cards) => api.put(`/lectures/${id}/flashcards`, { cards }),
+  shareFlashcards: (id) => api.post(`/lectures/${id}/share`),
+  getSharedFlashcards: (shareId) => api.get(`/lectures/shared/${shareId}`),
   deleteLecture: (id) => api.delete(`/lectures/${id}`),
   downloadFileUrl: (id) => `${API_BASE_URL}/lectures/${id}/file`,
+};
+
+// Admin Endpoints (Module 4)
+export const adminAPI = {
+  getStats: () => api.get("/admin/stats"),
+  getUsers: (params) => api.get("/admin/users", { params }),
+  createUser: (data) => api.post("/admin/users", data),
+  updateUser: (id, data) => api.patch(`/admin/users/${id}`, data),
+  toggleUserStatus: (id) => api.post(`/admin/users/${id}/toggle-status`),
 };
 
 export const healthAPI = {

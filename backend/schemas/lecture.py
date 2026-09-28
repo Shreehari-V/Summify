@@ -68,8 +68,26 @@ class FlashcardsRead(BaseModel):
     cards: list[FlashcardItem]
     total_cards: int
     model: str
+    is_shared: Optional[bool] = False
+    share_slug: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+class FlashcardDeckUpdate(BaseModel):
+    cards: list[FlashcardItem]
+
+class FlashcardShareResponse(BaseModel):
+    share_id: str
+    is_shared: bool
+    share_url: str
+
+class SharedFlashcardsRead(BaseModel):
+    lecture_title: str
+    educator_name: str
+    total_cards: int
+    cards: list[FlashcardItem]
+    model: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 class FlashcardGenerateRequest(BaseModel):
     count: Optional[int] = Field(default=None, ge=1, le=10)
@@ -86,4 +104,6 @@ class LectureRead(BaseModel):
     processing_status: str  # "uploaded", "extracting", "transcribing", "summarizing", "extracting_keywords", "generating_flashcards", "completed", "failed"
     status_message: Optional[str] = None
     error_message: Optional[str] = None
+    is_shared: Optional[bool] = False
+    share_slug: Optional[str] = None
     updated_at: Optional[datetime] = None

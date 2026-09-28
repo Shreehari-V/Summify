@@ -1,6 +1,7 @@
 # backend/api/lectures.py
 
 import os
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -19,6 +20,9 @@ from ..schemas.lecture import (
     KeywordsRead,
     FlashcardsRead,
     FlashcardGenerateRequest,
+    FlashcardDeckUpdate,
+    FlashcardShareResponse,
+    SharedFlashcardsRead,
 )
 from ..processing_service import (
     process_lecture_background,
@@ -76,12 +80,11 @@ async def upload_lecture(
     if settings.db is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
 
-    file_ext = Path(file.filename).suffix.lower()
-    is_valid_type = (file.content_type in ALLOWED_MIME) or (file_ext in ALLOWED_EXTENSIONS)
-    if not is_valid_type:
+    file_ext = Path(file.filename or "").suffix.lower()
+    if not file_ext or file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type ({file.content_type or file_ext}). Supported formats: PDF, DOCX, TXT, MD, MP3, WAV, MP4, WEBM.",
+            detail=f"Unsupported file type ({file_ext}). Supported formats: PDF, DOCX, TXT, MD, MP3, WAV, MP4, WEBM.",
         )
 
     contents = await file.read()
@@ -148,7 +151,11 @@ async def get_lecture(lecture_id: str, user: dict = Depends(get_current_user)):
     except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lecture ID format")
 
-    doc = await settings.db.lectures.find_one({"_id": oid, "user_id": user["user_id"]})
+    query = {"_id": oid}
+    if user.get("role") != "admin":
+        query["user_id"] = user["user_id"]
+
+    doc = await settings.db.lectures.find_one(query)
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
 
@@ -460,4 +467,156 @@ async def download_lecture_file(lecture_id: str, user: dict = Depends(get_curren
         path=str(file_path),
         filename=doc.get("original_filename", "lecture_file"),
         media_type=doc.get("file_type", "application/octet-stream"),
+    )
+
+
+@router.put("/{lecture_id}/flashcards", response_model=FlashcardsRead)
+async def update_flashcard_deck(
+    lecture_id: str,
+    payload: FlashcardDeckUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Educator / Owner can edit, add, or delete flashcards in the deck and save changes."""
+    if settings.db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+
+    try:
+        oid = ObjectId(lecture_id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lecture ID format")
+
+    # Check ownership or admin
+    query = {"_id": oid}
+    if user.get("role") != "admin":
+        query["user_id"] = user["user_id"]
+
+    lec = await settings.db.lectures.find_one(query)
+    if not lec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
+
+    # Serialize card items
+    raw_cards = []
+    for c in payload.cards:
+        raw_cards.append({
+            "id": c.id if c.id else str(uuid.uuid4())[:8],
+            "question": c.question.strip(),
+            "answer": c.answer.strip(),
+            "category": c.category.strip() if c.category else "Key Concept",
+        })
+
+    update_fields = {
+        "cards": raw_cards,
+        "total_cards": len(raw_cards),
+        "updated_at": datetime.utcnow(),
+    }
+
+    await settings.db.flashcards.update_one(
+        {"lecture_id": lecture_id},
+        {
+            "$set": update_fields,
+            "$setOnInsert": {
+                "lecture_id": lecture_id,
+                "user_id": lec.get("user_id", user["user_id"]),
+                "model": "educator-curated",
+                "created_at": datetime.utcnow(),
+            },
+        },
+        upsert=True,
+    )
+
+    saved_doc = await settings.db.flashcards.find_one({"lecture_id": lecture_id})
+    saved_doc["id"] = str(saved_doc["_id"])
+    if "user_id" not in saved_doc:
+        saved_doc["user_id"] = lec.get("user_id", user["user_id"])
+    if "model" not in saved_doc:
+        saved_doc["model"] = "educator-curated"
+    if "created_at" not in saved_doc:
+        saved_doc["created_at"] = saved_doc.get("updated_at", datetime.utcnow())
+    return saved_doc
+
+
+@router.post("/{lecture_id}/share", response_model=FlashcardShareResponse)
+async def toggle_flashcard_sharing(
+    lecture_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Toggle public sharing for this lecture's flashcards and return a shareable URL."""
+    if settings.db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+
+    try:
+        oid = ObjectId(lecture_id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lecture ID format")
+
+    query = {"_id": oid}
+    if user.get("role") != "admin":
+        query["user_id"] = user["user_id"]
+
+    lec = await settings.db.lectures.find_one(query)
+    if not lec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
+
+    current_shared = lec.get("is_shared", False)
+    new_shared = not current_shared
+    share_slug = lec.get("share_slug")
+
+    if not share_slug:
+        share_slug = str(uuid.uuid4()).replace("-", "")[:12]
+
+    # Update lecture & flashcards document
+    await settings.db.lectures.update_one(
+        {"_id": oid},
+        {"$set": {"is_shared": new_shared, "share_slug": share_slug, "updated_at": datetime.utcnow()}},
+    )
+    await settings.db.flashcards.update_one(
+        {"lecture_id": lecture_id},
+        {"$set": {"is_shared": new_shared, "share_slug": share_slug, "updated_at": datetime.utcnow()}},
+    )
+
+    return FlashcardShareResponse(
+        share_id=share_slug,
+        is_shared=new_shared,
+        share_url=f"/shared/flashcards/{share_slug}",
+    )
+
+
+@router.get("/shared/{share_id}", response_model=SharedFlashcardsRead)
+async def get_shared_flashcards(share_id: str):
+    """Public read-only endpoint for shared flashcards. Accessible without authentication."""
+    if settings.db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+
+    # Find by share_slug in lectures
+    lec = await settings.db.lectures.find_one({"share_slug": share_id, "is_shared": True})
+    if not lec:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Shared study set not found or sharing has been disabled by the educator.",
+        )
+
+    lecture_id = str(lec["_id"])
+    flashcards_doc = await settings.db.flashcards.find_one({"lecture_id": lecture_id})
+    if not flashcards_doc or not flashcards_doc.get("cards"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No flashcards found for this shared set.",
+        )
+
+    # Get educator name
+    educator_name = "Educator"
+    try:
+        user_doc = await settings.db.users.find_one({"_id": ObjectId(lec["user_id"])})
+        if user_doc:
+            educator_name = user_doc.get("name", "Educator")
+    except Exception:
+        pass
+
+    return SharedFlashcardsRead(
+        lecture_title=lec.get("title", "Lecture Study Set"),
+        educator_name=educator_name,
+        total_cards=len(flashcards_doc.get("cards", [])),
+        cards=flashcards_doc.get("cards", []),
+        model=flashcards_doc.get("model"),
+        created_at=flashcards_doc.get("created_at"),
     )

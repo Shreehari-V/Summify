@@ -32,8 +32,18 @@ import {
   ChevronLeft,
   ChevronRight,
   List,
+  Shield,
+  Users,
+  Share2,
+  Edit3,
+  Plus,
+  Lock,
+  UserCheck,
+  UserX,
+  ExternalLink,
+  Save,
 } from "lucide-react";
-import { authAPI, lecturesAPI, healthAPI } from "./api";
+import { authAPI, lecturesAPI, healthAPI, adminAPI } from "./api";
 import "./App.css";
 
 export default function App() {
@@ -101,6 +111,44 @@ export default function App() {
   const [flashcardViewMode, setFlashcardViewMode] = useState("carousel"); // 'carousel' | 'list'
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [isCardFlipped, setIsCardFlipped] = useState(false);
+
+  // Module 4: Educator Flashcard Review/Edit State
+  const [isEditingDeck, setIsEditingDeck] = useState(false);
+  const [editableCards, setEditableCards] = useState([]);
+  const [savingDeck, setSavingDeck] = useState(false);
+
+  // Module 4: Share Deck State
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareInfo, setShareInfo] = useState(null);
+  const [sharingLoading, setSharingLoading] = useState(false);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
+
+  // Module 4: Admin Console State
+  const [adminModalOpen, setAdminModalOpen] = useState(false);
+  const [adminStats, setAdminStats] = useState(null);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [loadingAdmin, setLoadingAdmin] = useState(false);
+  const [adminUserSearch, setAdminUserSearch] = useState("");
+  const [adminRoleFilter, setAdminRoleFilter] = useState("all");
+  const [adminStatusFilter, setAdminStatusFilter] = useState("all");
+  const [createUserModalOpen, setCreateUserModalOpen] = useState(false);
+  const [newUserData, setNewUserData] = useState({
+    name: "",
+    email: "",
+    password: "",
+    role: "student",
+  });
+  const [adminActionLoading, setAdminActionLoading] = useState(false);
+  const [adminNotice, setAdminNotice] = useState("");
+
+  // Module 4: Public Shared View State (?shared=...)
+  const [sharedParam, setSharedParam] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("shared") || null;
+  });
+  const [sharedDeck, setSharedDeck] = useState(null);
+  const [loadingSharedDeck, setLoadingSharedDeck] = useState(false);
+  const [sharedDeckError, setSharedDeckError] = useState("");
 
   // Upload State
   const [dragActive, setDragActive] = useState(false);
@@ -467,6 +515,196 @@ ${
     }
   };
 
+  // Module 4: Educator Flashcard Review & Edit Handlers
+  const handleStartEditDeck = () => {
+    if (!flashcardsData?.cards) return;
+    setEditableCards(JSON.parse(JSON.stringify(flashcardsData.cards)));
+    setIsEditingDeck(true);
+  };
+
+  const handleCancelEditDeck = () => {
+    setIsEditingDeck(false);
+    setEditableCards([]);
+  };
+
+  const handleCardFieldChange = (index, field, value) => {
+    setEditableCards((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], [field]: value };
+      return copy;
+    });
+  };
+
+  const handleAddCard = () => {
+    setEditableCards((prev) => [
+      ...prev,
+      {
+        id: `custom-${Date.now()}`,
+        question: "",
+        answer: "",
+        category: "Key Concept",
+      },
+    ]);
+  };
+
+  const handleDeleteCard = (index) => {
+    setEditableCards((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveDeck = async () => {
+    if (!selectedLecture) return;
+    const validCards = editableCards.filter(
+      (c) => c.question.trim().length > 0 && c.answer.trim().length > 0
+    );
+    if (validCards.length === 0) {
+      showAlert("danger", "Deck must contain at least one question and answer.");
+      return;
+    }
+    setSavingDeck(true);
+    try {
+      const res = await lecturesAPI.updateFlashcards(selectedLecture.id, validCards);
+      setFlashcardsData(res.data);
+      setIsEditingDeck(false);
+      showAlert("success", "Flashcard deck updated and saved successfully!");
+    } catch (err) {
+      console.error("Save deck failed:", err);
+      showAlert("danger", err.response?.data?.detail || "Failed to save flashcard deck.");
+    } finally {
+      setSavingDeck(false);
+    }
+  };
+
+  // Module 4: Flashcard Share Handlers
+  const handleOpenShareModal = async () => {
+    if (!selectedLecture) return;
+    setSharingLoading(true);
+    try {
+      const res = await lecturesAPI.shareFlashcards(selectedLecture.id);
+      setShareInfo(res.data);
+      setShareModalOpen(true);
+      setCopiedShareLink(false);
+    } catch (err) {
+      console.error("Share failed:", err);
+      showAlert("danger", err.response?.data?.detail || "Failed to generate share link.");
+    } finally {
+      setSharingLoading(false);
+    }
+  };
+
+  const handleCopyShareLink = () => {
+    if (!shareInfo) return;
+    const url = `${window.location.origin}/?shared=${shareInfo.share_id}`;
+    navigator.clipboard.writeText(url);
+    setCopiedShareLink(true);
+    setTimeout(() => setCopiedShareLink(false), 2500);
+  };
+
+  // Module 4: Admin Console Handlers
+  const fetchAdminData = async () => {
+    if (!token || user?.role !== "admin") return;
+    setLoadingAdmin(true);
+    setAdminNotice("");
+    try {
+      const [statsRes, usersRes] = await Promise.all([
+        adminAPI.getStats(),
+        adminAPI.getUsers({
+          role: adminRoleFilter !== "all" ? adminRoleFilter : undefined,
+          is_active:
+            adminStatusFilter === "active"
+              ? true
+              : adminStatusFilter === "deactivated"
+              ? false
+              : undefined,
+          search: adminUserSearch.trim() || undefined,
+        }),
+      ]);
+      setAdminStats(statsRes?.data || null);
+      setAdminUsers(Array.isArray(usersRes?.data) ? usersRes.data : []);
+    } catch (err) {
+      console.error("Failed to load admin console data:", err);
+      setAdminNotice(err.response?.data?.detail || "Failed to load admin data");
+    } finally {
+      setLoadingAdmin(false);
+    }
+  };
+
+  useEffect(() => {
+    if (adminModalOpen && user?.role === "admin") {
+      fetchAdminData();
+    }
+  }, [adminModalOpen, adminRoleFilter, adminStatusFilter, adminUserSearch]);
+
+  const handleToggleUserStatus = async (targetUser) => {
+    if (!targetUser) return;
+    const isSelf = Boolean(user && (targetUser.id === user.id || targetUser.id === user.user_id));
+    if (isSelf) {
+      setAdminNotice("You cannot deactivate your own administrative account.");
+      return;
+    }
+    setAdminActionLoading(true);
+    try {
+      const res = await adminAPI.toggleUserStatus(targetUser.id);
+      const isNowActive = res?.data?.is_active ?? !targetUser.is_active;
+      setAdminNotice(`Account status for ${targetUser.name || targetUser.email} updated to ${isNowActive ? "Active" : "Deactivated"}.`);
+      await fetchAdminData();
+    } catch (err) {
+      setAdminNotice(err.response?.data?.detail || "Failed to update user status");
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleCreateUser = async (e) => {
+    e.preventDefault();
+    if (!newUserData.email || !newUserData.password) return;
+    setAdminActionLoading(true);
+    try {
+      await adminAPI.createUser(newUserData);
+      setCreateUserModalOpen(false);
+      setNewUserData({ name: "", email: "", password: "", role: "student" });
+      setAdminNotice("User account created successfully.");
+      await fetchAdminData();
+    } catch (err) {
+      setAdminNotice(err.response?.data?.detail || "Failed to create user");
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleUpdateUserRole = async (userId, newRole) => {
+    setAdminActionLoading(true);
+    try {
+      await adminAPI.updateUser(userId, { role: newRole });
+      setAdminNotice("User role updated successfully.");
+      await fetchAdminData();
+    } catch (err) {
+      setAdminNotice(err.response?.data?.detail || "Failed to update user role");
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  // Module 4: Fetch Shared Deck if sharedParam present
+  useEffect(() => {
+    if (sharedParam) {
+      setLoadingSharedDeck(true);
+      lecturesAPI
+        .getSharedFlashcards(sharedParam)
+        .then((res) => {
+          setSharedDeck(res.data);
+        })
+        .catch((err) => {
+          console.error("Failed to load shared flashcards:", err);
+          setSharedDeckError(
+            err.response?.data?.detail || "Shared study deck not found or link has expired."
+          );
+        })
+        .finally(() => {
+          setLoadingSharedDeck(false);
+        });
+    }
+  }, [sharedParam]);
+
   // Auth Handlers
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -668,6 +906,214 @@ ${
 
   const totalStorage = lectures.reduce((acc, curr) => acc + (curr.file_size || 0), 0);
 
+  if (sharedParam) {
+    return (
+      <div className="app-container">
+        <nav className="navbar">
+          <div
+            className="brand-container"
+            onClick={() => {
+              window.location.href = window.location.pathname;
+            }}
+          >
+            <div className="brand-icon-wrapper">
+              <Sparkles size={20} />
+            </div>
+            <span>Summify</span>
+            <span
+              style={{
+                fontSize: "0.75rem",
+                padding: "0.2rem 0.6rem",
+                borderRadius: "var(--radius-full)",
+                background: "var(--accent-primary)",
+                color: "var(--accent-cream)",
+                marginLeft: "0.5rem",
+                fontWeight: 700,
+              }}
+            >
+              Public Study Set
+            </span>
+          </div>
+          <div className="nav-actions">
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                window.location.href = window.location.pathname;
+              }}
+            >
+              Return to Workspace
+            </button>
+          </div>
+        </nav>
+
+        <main className="main-content" style={{ maxWidth: 860, margin: "2rem auto", width: "100%" }}>
+          {loadingSharedDeck ? (
+            <div style={{ textAlign: "center", padding: "4rem 1rem" }}>
+              <RefreshCw size={32} className="spin-animation" color="var(--accent-cream)" />
+              <p style={{ marginTop: "1rem", color: "var(--text-muted)" }}>Loading shared study set...</p>
+            </div>
+          ) : sharedDeckError ? (
+            <div className="alert-banner alert-danger" style={{ textAlign: "center", padding: "2rem" }}>
+              <AlertCircle size={24} style={{ marginBottom: "0.5rem" }} />
+              <h3>{sharedDeckError}</h3>
+              <p style={{ marginTop: "0.5rem", fontSize: "0.9rem" }}>Please verify the link with your educator.</p>
+            </div>
+          ) : sharedDeck && sharedDeck.cards && sharedDeck.cards.length > 0 ? (
+            <div className="shared-deck-card">
+              <div className="shared-deck-header">
+                <div>
+                  <div className="flashcard-category-badge" style={{ marginBottom: "0.5rem" }}>
+                    Shared Flashcards
+                  </div>
+                  <h2 style={{ color: "var(--accent-cream)", margin: "0.25rem 0" }}>{sharedDeck.lecture_title}</h2>
+                  <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", margin: 0 }}>
+                    {sharedDeck.total_cards} Flashcards &bull; Interactive Study Mode
+                  </p>
+                </div>
+                <div className="view-mode-toggles">
+                  <button
+                    type="button"
+                    className={`view-mode-btn ${flashcardViewMode === "carousel" ? "active" : ""}`}
+                    onClick={() => {
+                      setFlashcardViewMode("carousel");
+                      setIsCardFlipped(false);
+                    }}
+                  >
+                    <Layers size={13} /> <span>Study Mode</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`view-mode-btn ${flashcardViewMode === "list" ? "active" : ""}`}
+                    onClick={() => setFlashcardViewMode("list")}
+                  >
+                    <List size={13} /> <span>All Cards ({sharedDeck.cards.length})</span>
+                  </button>
+                </div>
+              </div>
+
+              {flashcardViewMode === "carousel" ? (
+                <div className="flashcard-carousel-stage">
+                  <div className="flashcard-progress-bar-wrap">
+                    <span>
+                      Card {currentCardIndex + 1} of {sharedDeck.cards.length}
+                    </span>
+                    <div className="flashcard-progress-track">
+                      <div
+                        className="flashcard-progress-fill"
+                        style={{
+                          width: `${((currentCardIndex + 1) / sharedDeck.cards.length) * 100}%`,
+                        }}
+                      />
+                    </div>
+                    <span>{Math.round(((currentCardIndex + 1) / sharedDeck.cards.length) * 100)}%</span>
+                  </div>
+
+                  {(() => {
+                    const card = sharedDeck.cards[currentCardIndex];
+                    return (
+                      <div
+                        className="flashcard-perspective-box"
+                        onClick={() => setIsCardFlipped((prev) => !prev)}
+                        title="Click to flip card"
+                      >
+                        <div className={`flashcard-3d-card ${isCardFlipped ? "flipped" : ""}`}>
+                          <div className="flashcard-face front">
+                            <div className="flashcard-top-row">
+                              <span className="flashcard-category-badge">{card?.category || "Concept"}</span>
+                              <span className="flashcard-side-indicator">QUESTION</span>
+                            </div>
+                            <div className="flashcard-body-text">{card?.question}</div>
+                            <div className="flashcard-footer-prompt">
+                              <span className="flashcard-flip-cue">
+                                <RotateCcw size={13} /> Click to reveal answer
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flashcard-face back">
+                            <div className="flashcard-top-row">
+                              <span className="flashcard-category-badge">{card?.category || "Concept"}</span>
+                              <span className="flashcard-side-indicator" style={{ color: "var(--accent-sage-light)" }}>
+                                ANSWER
+                              </span>
+                            </div>
+                            <div className="flashcard-body-text answer-text">{card?.answer}</div>
+                            <div className="flashcard-footer-prompt">
+                              <span className="flashcard-flip-cue">
+                                <RotateCcw size={13} /> Click to flip back
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="flashcard-nav-controls">
+                    <button
+                      type="button"
+                      className="flashcard-nav-btn"
+                      onClick={() => {
+                        setCurrentCardIndex((prev) => (prev > 0 ? prev - 1 : sharedDeck.cards.length - 1));
+                        setIsCardFlipped(false);
+                      }}
+                      title="Previous card"
+                    >
+                      <ChevronLeft size={18} />
+                      <span>Prev</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setIsCardFlipped((prev) => !prev)}
+                      style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}
+                    >
+                      <RotateCcw size={14} />
+                      <span>Flip Card</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="flashcard-nav-btn"
+                      onClick={() => {
+                        setCurrentCardIndex((prev) => (prev + 1 < sharedDeck.cards.length ? prev + 1 : 0));
+                        setIsCardFlipped(false);
+                      }}
+                      title="Next card"
+                    >
+                      <span>Next</span>
+                      <ChevronRight size={18} />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flashcards-list-view">
+                  {sharedDeck.cards.map((card, idx) => (
+                    <div key={card.id || idx} className="flashcard-list-item">
+                      <div className="flashcard-list-header">
+                        <span className="flashcard-number-tag">CARD #{idx + 1}</span>
+                        <span className="flashcard-category-badge">{card.category || "Concept"}</span>
+                      </div>
+                      <div className="flashcard-list-qa">
+                        <div className="flashcard-list-q">Q: {card.question}</div>
+                        <div className="flashcard-list-a">A: {card.answer}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ textAlign: "center", padding: "3rem" }}>
+              <p>No flashcards found in this study set.</p>
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* NAVIGATION BAR */}
@@ -697,8 +1143,32 @@ ${
 
           {token && user ? (
             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              {user.role === "admin" && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setAdminModalOpen(true)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.45rem",
+                    padding: "0.4rem 0.85rem",
+                    fontSize: "0.85rem",
+                  }}
+                  title="Open Admin Management Console"
+                >
+                  <Shield size={14} color="var(--accent-cream)" />
+                  <span>Admin Console</span>
+                </button>
+              )}
               <div className="user-badge">
-                {user.role === "educator" ? <BookOpen size={14} /> : <GraduationCap size={14} />}
+                {user.role === "admin" ? (
+                  <Shield size={14} color="var(--accent-cream)" />
+                ) : user.role === "educator" ? (
+                  <BookOpen size={14} />
+                ) : (
+                  <GraduationCap size={14} />
+                )}
                 <span>{user.name || user.email}</span>
                 <span className={`role-pill ${user.role}`}>{user.role}</span>
               </div>
@@ -1411,8 +1881,9 @@ ${
                       <div className="view-mode-toggles">
                         <button
                           type="button"
-                          className={`view-mode-btn ${flashcardViewMode === "carousel" ? "active" : ""}`}
+                          className={`view-mode-btn ${flashcardViewMode === "carousel" && !isEditingDeck ? "active" : ""}`}
                           onClick={() => {
+                            setIsEditingDeck(false);
                             setFlashcardViewMode("carousel");
                             setIsCardFlipped(false);
                           }}
@@ -1422,36 +1893,70 @@ ${
                         </button>
                         <button
                           type="button"
-                          className={`view-mode-btn ${flashcardViewMode === "list" ? "active" : ""}`}
-                          onClick={() => setFlashcardViewMode("list")}
+                          className={`view-mode-btn ${flashcardViewMode === "list" && !isEditingDeck ? "active" : ""}`}
+                          onClick={() => {
+                            setIsEditingDeck(false);
+                            setFlashcardViewMode("list");
+                          }}
                         >
                           <List size={13} />
                           <span>All Cards ({flashcardsData.cards.length})</span>
                         </button>
+
+                        {(user?.role === "educator" || user?.role === "admin" || user?.id === selectedLecture?.user_id) && (
+                          <button
+                            type="button"
+                            className={`view-mode-btn ${isEditingDeck ? "active" : ""}`}
+                            onClick={() => {
+                              if (isEditingDeck) {
+                                handleCancelEditDeck();
+                              } else {
+                                handleStartEditDeck();
+                              }
+                            }}
+                            title="Edit questions, answers, and categories"
+                          >
+                            <Edit3 size={13} />
+                            <span>{isEditingDeck ? "Exit Edit" : "Edit Deck"}</span>
+                          </button>
+                        )}
                       </div>
 
-                      <div className="flashcard-regen-controls">
-                        <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Target:</span>
-                        <select
-                          className="card-count-select"
-                          value={flashcardCountSelect}
-                          onChange={(e) => setFlashcardCountSelect(Number(e.target.value))}
-                          disabled={regeneratingCards}
-                        >
-                          <option value={5}>5 Cards</option>
-                          <option value={8}>8 Cards</option>
-                          <option value={10}>10 Cards</option>
-                        </select>
+                      <div className="flashcard-actions-right">
                         <button
                           type="button"
-                          className="btn btn-secondary"
-                          onClick={handleRegenerateFlashcards}
-                          disabled={regeneratingCards}
-                          title="Regenerate flashcards from current summary"
+                          className="btn btn-secondary share-btn"
+                          onClick={handleOpenShareModal}
+                          disabled={sharingLoading}
+                          title="Share study set with students"
                         >
-                          <RefreshCw size={14} className={regeneratingCards ? "spin-animation" : ""} />
-                          {regeneratingCards ? "Generating..." : "Regenerate"}
+                          <Share2 size={13} />
+                          <span>{sharingLoading ? "Sharing..." : "Share"}</span>
                         </button>
+
+                        <div className="flashcard-regen-controls">
+                          <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Target:</span>
+                          <select
+                            className="card-count-select"
+                            value={flashcardCountSelect}
+                            onChange={(e) => setFlashcardCountSelect(Number(e.target.value))}
+                            disabled={regeneratingCards || isEditingDeck}
+                          >
+                            <option value={5}>5 Cards</option>
+                            <option value={8}>8 Cards</option>
+                            <option value={10}>10 Cards</option>
+                          </select>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={handleRegenerateFlashcards}
+                            disabled={regeneratingCards || isEditingDeck}
+                            title="Regenerate flashcards from current summary"
+                          >
+                            <RefreshCw size={14} className={regeneratingCards ? "spin-animation" : ""} />
+                            {regeneratingCards ? "Generating..." : "Regenerate"}
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -1462,123 +1967,226 @@ ${
                       </div>
                     )}
 
-                    {/* Mode 1: 3D Flip Carousel */}
-                    {flashcardViewMode === "carousel" && (
-                      <div className="flashcard-carousel-stage">
-                        <div className="flashcard-progress-bar-wrap">
-                          <span>
-                            Card {currentCardIndex + 1} of {flashcardsData.cards.length}
-                          </span>
-                          <div className="flashcard-progress-track">
-                            <div
-                              className="flashcard-progress-fill"
-                              style={{
-                                width: `${((currentCardIndex + 1) / flashcardsData.cards.length) * 100}%`,
-                              }}
-                            />
+                    {isEditingDeck ? (
+                      <div className="flashcard-edit-stage">
+                        <div className="flashcard-edit-header">
+                          <div>
+                            <h4 style={{ margin: 0, color: "var(--accent-cream)", fontSize: "1.05rem" }}>
+                              Educator Flashcard Review & Edit
+                            </h4>
+                            <p style={{ margin: "0.25rem 0 0", fontSize: "0.82rem", color: "var(--text-muted)" }}>
+                              Fine-tune questions, answers, categories, or append custom cards before sharing with students.
+                            </p>
                           </div>
-                          <span>{Math.round(((currentCardIndex + 1) / flashcardsData.cards.length) * 100)}%</span>
+                          <div style={{ display: "flex", gap: "0.5rem" }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={handleCancelEditDeck}
+                              disabled={savingDeck}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={handleSaveDeck}
+                              disabled={savingDeck}
+                            >
+                              <Save size={14} />
+                              <span>{savingDeck ? "Saving..." : "Save Deck"}</span>
+                            </button>
+                          </div>
                         </div>
 
-                        {(() => {
-                          const card = flashcardsData.cards[currentCardIndex];
-                          return (
-                            <div
-                              className="flashcard-perspective-box"
-                              onClick={() => setIsCardFlipped((prev) => !prev)}
-                              title="Click to flip card"
-                            >
-                              <div className={`flashcard-3d-card ${isCardFlipped ? "flipped" : ""}`}>
-                                <div className="flashcard-face front">
-                                  <div className="flashcard-top-row">
-                                    <span className="flashcard-category-badge">{card?.category || "Concept"}</span>
-                                    <span className="flashcard-side-indicator">QUESTION</span>
-                                  </div>
-                                  <div className="flashcard-body-text">{card?.question}</div>
-                                  <div className="flashcard-footer-prompt">
-                                    <span className="flashcard-flip-cue">
-                                      <RotateCcw size={13} /> Click to reveal answer
-                                    </span>
-                                    <span style={{ color: "var(--text-muted)" }}>[Space to flip]</span>
-                                  </div>
+                        <div className="flashcard-edit-list">
+                          {editableCards.map((card, idx) => (
+                            <div key={card.id || idx} className="card-edit-item">
+                              <div className="card-edit-header-row">
+                                <span className="card-index-badge">Card #{idx + 1}</span>
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                  <input
+                                    type="text"
+                                    className="card-category-input"
+                                    placeholder="Category / Tag"
+                                    value={card.category || ""}
+                                    onChange={(e) => handleCardFieldChange(idx, "category", e.target.value)}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="btn-delete-card"
+                                    onClick={() => handleDeleteCard(idx)}
+                                    title="Delete Card"
+                                  >
+                                    <Trash2 size={15} />
+                                  </button>
                                 </div>
-
-                                <div className="flashcard-face back">
-                                  <div className="flashcard-top-row">
-                                    <span className="flashcard-category-badge">{card?.category || "Concept"}</span>
-                                    <span className="flashcard-side-indicator" style={{ color: "var(--accent-sage-light)" }}>
-                                      ANSWER
-                                    </span>
-                                  </div>
-                                  <div className="flashcard-body-text answer-text">{card?.answer}</div>
-                                  <div className="flashcard-footer-prompt">
-                                    <span className="flashcard-flip-cue">
-                                      <RotateCcw size={13} /> Click to flip back
-                                    </span>
-                                    <span style={{ color: "var(--text-muted)" }}>[Space to flip]</span>
-                                  </div>
+                              </div>
+                              <div className="card-edit-body">
+                                <div className="card-edit-field">
+                                  <label>Question</label>
+                                  <textarea
+                                    className="card-textarea"
+                                    rows={2}
+                                    placeholder="Enter question..."
+                                    value={card.question}
+                                    onChange={(e) => handleCardFieldChange(idx, "question", e.target.value)}
+                                  />
+                                </div>
+                                <div className="card-edit-field">
+                                  <label>Answer</label>
+                                  <textarea
+                                    className="card-textarea answer"
+                                    rows={3}
+                                    placeholder="Enter answer..."
+                                    value={card.answer}
+                                    onChange={(e) => handleCardFieldChange(idx, "answer", e.target.value)}
+                                  />
                                 </div>
                               </div>
                             </div>
-                          );
-                        })()}
-
-                        <div className="flashcard-nav-controls">
-                          <button
-                            type="button"
-                            className="flashcard-nav-btn"
-                            onClick={() => {
-                              setIsCardFlipped(false);
-                              setCurrentCardIndex((prev) => (prev > 0 ? prev - 1 : flashcardsData.cards.length - 1));
-                            }}
-                            title="Previous card (Left Arrow)"
-                          >
-                            <ChevronLeft size={22} />
-                          </button>
-
-                          <button
-                            type="button"
-                            className="flashcard-flip-btn"
-                            onClick={() => setIsCardFlipped((prev) => !prev)}
-                          >
-                            <RotateCcw size={15} />
-                            <span>{isCardFlipped ? "Show Question" : "Reveal Answer"}</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            className="flashcard-nav-btn"
-                            onClick={() => {
-                              setIsCardFlipped(false);
-                              setCurrentCardIndex((prev) => (prev + 1 < flashcardsData.cards.length ? prev + 1 : 0));
-                            }}
-                            title="Next card (Right Arrow)"
-                          >
-                            <ChevronRight size={22} />
-                          </button>
+                          ))}
                         </div>
-                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                          Keyboard shortcuts: [←] Previous • [→] Next • [Space] Flip
+
+                        <div className="flashcard-edit-footer">
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={handleAddCard}
+                          >
+                            <Plus size={15} /> Add Flashcard
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={handleSaveDeck}
+                            disabled={savingDeck}
+                          >
+                            <Save size={15} /> {savingDeck ? "Saving Changes..." : "Save Deck"}
+                          </button>
                         </div>
                       </div>
-                    )}
-
-                    {/* Mode 2: All Cards List View */}
-                    {flashcardViewMode === "list" && (
-                      <div className="flashcards-list-view">
-                        {flashcardsData.cards.map((card, idx) => (
-                          <div key={card.id || idx} className="flashcard-list-item">
-                            <div className="flashcard-list-header">
-                              <span className="flashcard-number-tag">CARD #{idx + 1}</span>
-                              <span className="flashcard-category-badge">{card.category || "Key Concept"}</span>
+                    ) : (
+                      <>
+                        {/* Mode 1: 3D Flip Carousel */}
+                        {flashcardViewMode === "carousel" && (
+                          <div className="flashcard-carousel-stage">
+                            <div className="flashcard-progress-bar-wrap">
+                              <span>
+                                Card {currentCardIndex + 1} of {flashcardsData.cards.length}
+                              </span>
+                              <div className="flashcard-progress-track">
+                                <div
+                                  className="flashcard-progress-fill"
+                                  style={{
+                                    width: `${((currentCardIndex + 1) / flashcardsData.cards.length) * 100}%`,
+                                  }}
+                                />
+                              </div>
+                              <span>{Math.round(((currentCardIndex + 1) / flashcardsData.cards.length) * 100)}%</span>
                             </div>
-                            <div className="flashcard-list-qa">
-                              <div className="flashcard-list-q">Q: {card.question}</div>
-                              <div className="flashcard-list-a">A: {card.answer}</div>
+
+                            {(() => {
+                              const card = flashcardsData.cards[currentCardIndex];
+                              return (
+                                <div
+                                  className="flashcard-perspective-box"
+                                  onClick={() => setIsCardFlipped((prev) => !prev)}
+                                  title="Click to flip card"
+                                >
+                                  <div className={`flashcard-3d-card ${isCardFlipped ? "flipped" : ""}`}>
+                                    <div className="flashcard-face front">
+                                      <div className="flashcard-top-row">
+                                        <span className="flashcard-category-badge">{card?.category || "Concept"}</span>
+                                        <span className="flashcard-side-indicator">QUESTION</span>
+                                      </div>
+                                      <div className="flashcard-body-text">{card?.question}</div>
+                                      <div className="flashcard-footer-prompt">
+                                        <span className="flashcard-flip-cue">
+                                          <RotateCcw size={13} /> Click to reveal answer
+                                        </span>
+                                        <span style={{ color: "var(--text-muted)" }}>[Space to flip]</span>
+                                      </div>
+                                    </div>
+
+                                    <div className="flashcard-face back">
+                                      <div className="flashcard-top-row">
+                                        <span className="flashcard-category-badge">{card?.category || "Concept"}</span>
+                                        <span className="flashcard-side-indicator" style={{ color: "var(--accent-sage-light)" }}>
+                                          ANSWER
+                                        </span>
+                                      </div>
+                                      <div className="flashcard-body-text answer-text">{card?.answer}</div>
+                                      <div className="flashcard-footer-prompt">
+                                        <span className="flashcard-flip-cue">
+                                          <RotateCcw size={13} /> Click to flip back
+                                        </span>
+                                        <span style={{ color: "var(--text-muted)" }}>[Space to flip]</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
+                            <div className="flashcard-nav-controls">
+                              <button
+                                type="button"
+                                className="flashcard-nav-btn"
+                                onClick={() => {
+                                  setIsCardFlipped(false);
+                                  setCurrentCardIndex((prev) => (prev > 0 ? prev - 1 : flashcardsData.cards.length - 1));
+                                }}
+                                title="Previous card (Left Arrow)"
+                              >
+                                <ChevronLeft size={22} />
+                              </button>
+
+                              <button
+                                type="button"
+                                className="flashcard-flip-btn"
+                                onClick={() => setIsCardFlipped((prev) => !prev)}
+                              >
+                                <RotateCcw size={15} />
+                                <span>{isCardFlipped ? "Show Question" : "Reveal Answer"}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                className="flashcard-nav-btn"
+                                onClick={() => {
+                                  setIsCardFlipped(false);
+                                  setCurrentCardIndex((prev) => (prev + 1 < flashcardsData.cards.length ? prev + 1 : 0));
+                                }}
+                                title="Next card (Right Arrow)"
+                              >
+                                <ChevronRight size={22} />
+                              </button>
+                            </div>
+                            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                              Keyboard shortcuts: [←] Previous • [→] Next • [Space] Flip
                             </div>
                           </div>
-                        ))}
-                      </div>
+                        )}
+
+                        {/* Mode 2: All Cards List View */}
+                        {flashcardViewMode === "list" && (
+                          <div className="flashcards-list-view">
+                            {flashcardsData.cards.map((card, idx) => (
+                              <div key={card.id || idx} className="flashcard-list-item">
+                                <div className="flashcard-list-header">
+                                  <span className="flashcard-number-tag">CARD #{idx + 1}</span>
+                                  <span className="flashcard-category-badge">{card.category || "Key Concept"}</span>
+                                </div>
+                                <div className="flashcard-list-qa">
+                                  <div className="flashcard-list-q">Q: {card.question}</div>
+                                  <div className="flashcard-list-a">A: {card.answer}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
                     )}
                   </>
                 ) : (
@@ -1901,6 +2509,384 @@ ${
                       <CheckCircle2 size={16} /> Create Account
                     </>
                   )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODULE 4: FLASHCARD SHARE MODAL */}
+      {shareModalOpen && shareInfo && (
+        <div className="modal-overlay" onClick={() => setShareModalOpen(false)}>
+          <div className="modal-content share-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <Share2 size={20} color="var(--accent-cream)" />
+                <h3 style={{ margin: 0, color: "var(--accent-cream)" }}>Share Study Deck</h3>
+              </div>
+              <button className="btn-close" onClick={() => setShareModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="share-modal-body">
+              <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: 1.5, margin: 0 }}>
+                Anyone with this link can practice and study this deck in interactive mode without creating an account.
+              </p>
+
+              <div className="share-link-box">
+                <input
+                  type="text"
+                  readOnly
+                  className="share-link-input"
+                  value={`${window.location.origin}/?shared=${shareInfo.share_id}`}
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleCopyShareLink}
+                  style={{ padding: "0.45rem 0.95rem" }}
+                >
+                  {copiedShareLink ? <Check size={16} /> : <Copy size={16} />}
+                  <span>{copiedShareLink ? "Copied!" : "Copy"}</span>
+                </button>
+              </div>
+
+              <div className="share-meta-info">
+                <span>Lecture: <strong>{shareInfo.lecture_title || selectedLecture?.title}</strong></span>
+                <span>Total Cards: <strong>{shareInfo.total_cards}</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODULE 4: ADMIN CONSOLE MODAL */}
+      {adminModalOpen && user?.role === "admin" && (
+        <div className="modal-overlay" onClick={() => setAdminModalOpen(false)}>
+          <div className="modal-content admin-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <Shield size={20} color="var(--accent-cream)" />
+                  <h3 style={{ margin: 0, color: "var(--accent-cream)" }}>Summify Administration Console</h3>
+                </div>
+                <div className="admin-header-subtitle">
+                  System Oversight, Usage Metrics, and User Account Management (No sensitive password data exposed)
+                </div>
+              </div>
+              <button className="btn-close" onClick={() => setAdminModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: "1.25rem 0 0", display: "flex", flexDirection: "column", gap: "1rem", overflowY: "auto" }}>
+              {adminNotice && (
+                <div
+                  className="alert-banner"
+                  style={{
+                    padding: "0.6rem 1rem",
+                    fontSize: "0.85rem",
+                    background: "rgba(109, 2, 2, 0.4)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "var(--accent-cream)",
+                  }}
+                >
+                  <AlertCircle size={16} />
+                  <span>{adminNotice}</span>
+                </div>
+              )}
+
+              {/* STATS OVERVIEW */}
+              {adminStats && (() => {
+                const totalUsers = adminStats?.users?.total ?? adminStats?.total_users ?? 0;
+                const activeUsers = adminStats?.users?.active ?? adminStats?.active_users ?? 0;
+                const deactUsers = adminStats?.users?.deactivated ?? adminStats?.deactivated_users ?? Math.max(0, totalUsers - activeUsers);
+                const students = adminStats?.users?.students ?? adminStats?.students_count ?? 0;
+                const educators = adminStats?.users?.educators ?? adminStats?.educators_count ?? 0;
+                const admins = adminStats?.users?.admins ?? adminStats?.admins_count ?? 0;
+                const totalLectures = adminStats?.lectures?.total ?? adminStats?.total_lectures ?? 0;
+                const transcripts = adminStats?.lectures?.with_transcripts ?? 0;
+                const flashcards = adminStats?.lectures?.with_flashcards ?? 0;
+                const summaries = adminStats?.lectures?.with_summaries ?? 0;
+
+                return (
+                  <div className="admin-stats-grid">
+                    <div className="admin-stat-card">
+                      <span className="admin-stat-label">Total Users</span>
+                      <span className="admin-stat-num">{totalUsers}</span>
+                      <span className="admin-stat-sub">
+                        {students} Students • {educators} Educators • {admins} Admins
+                      </span>
+                    </div>
+
+                    <div className="admin-stat-card">
+                      <span className="admin-stat-label">Active Accounts</span>
+                      <span className="admin-stat-num">{activeUsers}</span>
+                      <span className="admin-stat-sub">
+                        {deactUsers} Deactivated
+                      </span>
+                    </div>
+
+                    <div className="admin-stat-card">
+                      <span className="admin-stat-label">Total Lectures</span>
+                      <span className="admin-stat-num">{totalLectures}</span>
+                      <span className="admin-stat-sub">
+                        {transcripts} Transcripts Processed
+                      </span>
+                    </div>
+
+                    <div className="admin-stat-card">
+                      <span className="admin-stat-label">Study Materials</span>
+                      <span className="admin-stat-num">{flashcards}</span>
+                      <span className="admin-stat-sub">
+                        {summaries} Summaries Generated
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* USER MANAGEMENT TOOLBAR */}
+              <div className="admin-toolbar">
+                <div className="admin-filter-group">
+                  <div className="search-box" style={{ maxWidth: 220 }}>
+                    <Search size={14} className="search-icon" />
+                    <input
+                      type="text"
+                      placeholder="Search name or email..."
+                      value={adminUserSearch}
+                      onChange={(e) => setAdminUserSearch(e.target.value)}
+                      style={{ fontSize: "0.82rem", paddingLeft: "2rem" }}
+                    />
+                  </div>
+
+                  <select
+                    className="admin-select"
+                    value={adminRoleFilter}
+                    onChange={(e) => setAdminRoleFilter(e.target.value)}
+                  >
+                    <option value="all">All Roles</option>
+                    <option value="student">Students</option>
+                    <option value="educator">Educators</option>
+                    <option value="admin">Administrators</option>
+                  </select>
+
+                  <select
+                    className="admin-select"
+                    value={adminStatusFilter}
+                    onChange={(e) => setAdminStatusFilter(e.target.value)}
+                  >
+                    <option value="all">All Status</option>
+                    <option value="active">Active</option>
+                    <option value="deactivated">Deactivated</option>
+                  </select>
+                </div>
+
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={fetchAdminData}
+                    disabled={loadingAdmin}
+                    title="Refresh data"
+                  >
+                    <RefreshCw size={14} className={loadingAdmin ? "spin-animation" : ""} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setCreateUserModalOpen(true)}
+                  >
+                    <Plus size={14} /> Add User
+                  </button>
+                </div>
+              </div>
+
+              {/* USER TABLE */}
+              <div className="admin-table-container">
+                {loadingAdmin ? (
+                  <div style={{ padding: "2.5rem", textAlign: "center" }}>
+                    <RefreshCw size={24} className="spin-animation" color="var(--accent-cream)" />
+                    <p style={{ marginTop: "0.5rem", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+                      Loading accounts...
+                    </p>
+                  </div>
+                ) : (!adminUsers || adminUsers.length === 0) ? (
+                  <div style={{ padding: "2.5rem", textAlign: "center", color: "var(--text-muted)" }}>
+                    No users matching criteria.
+                  </div>
+                ) : (
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>User</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Joined</th>
+                        <th style={{ textAlign: "right" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(Array.isArray(adminUsers) ? adminUsers : []).map((u) => {
+                        const isSelf = Boolean(user && (u.id === user.id || u.id === user.user_id));
+                        let joinedDate = "—";
+                        if (u.created_at) {
+                          try {
+                            const d = new Date(u.created_at);
+                            if (!isNaN(d.getTime())) {
+                              joinedDate = d.toLocaleDateString();
+                            }
+                          } catch {
+                            joinedDate = "—";
+                          }
+                        }
+
+                        return (
+                          <tr key={u.id}>
+                            <td>
+                              <div className="admin-user-cell">
+                                <span className="admin-user-name">
+                                  {u.name || "User"} {isSelf && <span style={{ fontSize: "0.72rem", color: "var(--accent-sage-light)" }}>(You)</span>}
+                                </span>
+                                <span className="admin-user-email">{u.email}</span>
+                              </div>
+                            </td>
+                            <td>
+                              <select
+                                className="admin-select"
+                                style={{ padding: "0.2rem 0.5rem", fontSize: "0.78rem" }}
+                                value={u.role || "student"}
+                                onChange={(e) => handleUpdateUserRole(u.id, e.target.value)}
+                                disabled={adminActionLoading || isSelf}
+                              >
+                                <option value="student">student</option>
+                                <option value="educator">educator</option>
+                                <option value="admin">admin</option>
+                              </select>
+                            </td>
+                            <td>
+                              <span className={`status-badge ${u.is_active ? "active" : "deactivated"}`}>
+                                <span className={`status-dot ${u.is_active ? "active" : "deactivated"}`} />
+                                {u.is_active ? "Active" : "Deactivated"}
+                              </span>
+                            </td>
+                            <td style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                              {joinedDate}
+                            </td>
+                            <td style={{ textAlign: "right" }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{
+                                  padding: "0.25rem 0.65rem",
+                                  fontSize: "0.78rem",
+                                  opacity: isSelf ? 0.4 : 1,
+                                }}
+                                onClick={() => handleToggleUserStatus(u)}
+                                disabled={adminActionLoading || isSelf}
+                                title={isSelf ? "Cannot deactivate yourself" : u.is_active ? "Deactivate account" : "Activate account"}
+                              >
+                                {u.is_active ? (
+                                  <>
+                                    <UserX size={12} /> Deactivate
+                                  </>
+                                ) : (
+                                  <>
+                                    <UserCheck size={12} /> Activate
+                                  </>
+                                )}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE USER SUBMODAL */}
+      {createUserModalOpen && (
+        <div className="modal-overlay" style={{ zIndex: 110 }} onClick={() => setCreateUserModalOpen(false)}>
+          <div className="modal-content" style={{ maxWidth: 450 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0, color: "var(--accent-cream)" }}>Add User Account</h3>
+              <button className="btn-close" onClick={() => setCreateUserModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleCreateUser} style={{ display: "flex", flexDirection: "column", gap: "1rem", marginTop: "1rem" }}>
+              <div className="input-group">
+                <label>Full Name</label>
+                <input
+                  type="text"
+                  className="input-control"
+                  placeholder="Full Name"
+                  value={newUserData.name}
+                  onChange={(e) => setNewUserData({ ...newUserData, name: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="input-group">
+                <label>Email Address</label>
+                <input
+                  type="email"
+                  className="input-control"
+                  placeholder="email@example.com"
+                  value={newUserData.email}
+                  onChange={(e) => setNewUserData({ ...newUserData, email: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="input-group">
+                <label>Initial Password</label>
+                <input
+                  type="password"
+                  className="input-control"
+                  placeholder="At least 6 characters"
+                  minLength={6}
+                  value={newUserData.password}
+                  onChange={(e) => setNewUserData({ ...newUserData, password: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="input-group">
+                <label>Assigned Role</label>
+                <select
+                  className="admin-select"
+                  style={{ width: "100%", padding: "0.6rem" }}
+                  value={newUserData.role}
+                  onChange={(e) => setNewUserData({ ...newUserData, role: e.target.value })}
+                >
+                  <option value="student">Student</option>
+                  <option value="educator">Educator</option>
+                  <option value="admin">Administrator</option>
+                </select>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "0.5rem" }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setCreateUserModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={adminActionLoading}
+                >
+                  {adminActionLoading ? "Creating..." : "Create User"}
                 </button>
               </div>
             </form>

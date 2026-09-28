@@ -16,59 +16,107 @@ router = APIRouter()
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 async def register_user(payload: UserCreate):
     """Create a new user and return a JWT token.
-    Email must be unique. Password is stored as bcrypt hash.
+    Public registration can only create 'student' or 'educator' accounts.
+    Admin accounts cannot be registered publicly.
     """
     if settings.db is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is unavailable",
+        )
+
+    # Extra defense: explicitly reject any attempt to register as admin
+    if getattr(payload, "role", "") == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin accounts cannot be registered publicly. Use the administrative setup script.",
+        )
+
     user_collection = settings.db.users
-    existing = await user_collection.find_one({"email": payload.email.lower()})
+    existing = await user_collection.find_one({"email": payload.email.lower().strip()})
     if existing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists.",
+        )
+
     hashed = hash_password(payload.password)
     user_doc = {
-        "name": payload.name,
-        "email": payload.email.lower(),
+        "name": payload.name.strip(),
+        "email": payload.email.lower().strip(),
         "hashed_password": hashed,
         "role": payload.role,
+        "is_active": True,
         "created_at": datetime.utcnow(),
     }
     result = await user_collection.insert_one(user_doc)
     user_id = str(result.inserted_id)
-    access_token = create_access_token({"sub": user_id})
+    access_token = create_access_token({"sub": user_id, "role": payload.role})
     return Token(access_token=access_token)
 
 @router.post("/login", response_model=Token)
 async def login_user(payload: LoginIn):
-    """Authenticate a user and return a JWT token."""
+    """Authenticate a user and return a JWT token.
+    Returns sanitized error message without leaking user existence.
+    """
     if settings.db is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is unavailable",
+        )
+
     user_collection = settings.db.users
-    user = await user_collection.find_one({"email": payload.email.lower()})
-    if not user or not verify_password(payload.password, user["hashed_password"]):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    user = await user_collection.find_one({"email": payload.email.lower().strip()})
+    
+    # Generic, secure invalid credentials error (prevents user enumeration)
+    if not user or not verify_password(payload.password, user.get("hashed_password", "")):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    # Check if account has been deactivated by an administrator
+    if not user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has been deactivated. Please contact an administrator.",
+        )
+
     user_id = str(user["_id"])
-    access_token = create_access_token({"sub": user_id})
+    role = user.get("role", "student")
+    access_token = create_access_token({"sub": user_id, "role": role})
     return Token(access_token=access_token)
 
 @router.get("/me", response_model=UserRead)
 async def get_current_user_profile(user_info: dict = Depends(get_current_user)):
-    """Retrieve details of the currently authenticated user."""
+    """Retrieve profile of the currently authenticated user. Never exposes password hash."""
     if settings.db is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is unavailable",
+        )
+
     user_id = user_info["user_id"]
     try:
         oid = ObjectId(user_id)
     except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user ID format",
+        )
     
     user = await settings.db.users.find_one({"_id": oid})
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
     
     return UserRead(
         id=str(user["_id"]),
         name=user.get("name", "User"),
         email=user["email"],
         role=user.get("role", "student"),
+        is_active=user.get("is_active", True),
         created_at=user.get("created_at"),
     )
