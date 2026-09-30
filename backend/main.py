@@ -39,10 +39,10 @@ async def db_auto_reconnect_middleware(request: Request, call_next):
         await connect_to_mongo()
     return await call_next(request)
 
-# Robust CORS supporting localhost on any port (5173, 5174, 3000, 127.0.0.1, etc.)
+# Robust CORS supporting localhost and Vercel production/preview deployments
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|.*\.vercel\.app)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

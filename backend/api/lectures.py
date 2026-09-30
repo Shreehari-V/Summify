@@ -31,8 +31,11 @@ from ..processing_service import (
 
 router = APIRouter()
 
-# Ensure upload directory exists
-UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
+# Ensure upload directory exists (use /tmp/uploads on Vercel's read-only serverless filesystem)
+if os.environ.get("VERCEL"):
+    UPLOAD_DIR = Path("/tmp/uploads")
+else:
+    UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {
